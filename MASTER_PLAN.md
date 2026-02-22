@@ -1508,7 +1508,7 @@ into improvements.md.
 <!-- Guardian appends here after phase completion -->
 
 #### Phase 2: Backend Integration
-**Status:** in-progress
+**Status:** completed
 **Decision IDs:** DEC-ARCH-005
 **Requirements:** REQ-GOAL-004, REQ-P2-001
 **Issues:** #24
@@ -1563,7 +1563,7 @@ into improvements.md.
 - `tests/test-architect-dispatch.sh` -- Dispatch integration tests
 
 ##### Decision Log
-<!-- Guardian appends here after phase completion -->
+- DEC-ARCH-005: Phase 2 dispatch via batched Task subagents (3-5 nodes per batch). 3-tier heuristic: <=5 nodes single batch, 6-15 nodes 2-3 batches, >15 nodes 4+ batches. Sequential dispatch prevents resource exhaustion. Addresses: REQ-GOAL-004.
 
 #### /architect Worktree Strategy
 
