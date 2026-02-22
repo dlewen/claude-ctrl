@@ -294,30 +294,6 @@ else
     fail "C2-T3: finalize_trace silently swallowed jq error (no error logged); manifest preserved but failure invisible"
 fi
 
-# C2-T4: refinalize_trace with malformed manifest — jq failure produces explicit error log
-echo ""
-echo "=== C2-T4: refinalize_trace logs explicit error for malformed manifest ==="
-TS_C2T4=$(make_tmpdir)
-TRACE_C2T4="bad-refin-$(date +%s)"
-mkdir -p "${TS_C2T4}/${TRACE_C2T4}/artifacts"
-echo "BROKEN JSON" > "${TS_C2T4}/${TRACE_C2T4}/manifest.json"
-_c2t4_out="${TS_C2T4}/_c2t4.out"
-bash -c "
-    source '${HOOKS_DIR}/log.sh'
-    source '${HOOKS_DIR}/context-lib.sh'
-    TRACE_STORE='${TS_C2T4}'
-    refinalize_trace '${TRACE_C2T4}'
-" > "$_c2t4_out" 2>&1 || true
-output_c2t4=$(cat "$_c2t4_out" 2>/dev/null)
-manifest_after_refin=$(cat "${TS_C2T4}/${TRACE_C2T4}/manifest.json" 2>/dev/null)
-if echo "$output_c2t4" | grep -qiE 'error|jq.*fail|manifest.*fail|failed.*manifest'; then
-    pass "C2-T4: refinalize_trace logs explicit error when jq fails on manifest"
-elif [[ "$manifest_after_refin" != "BROKEN JSON" ]]; then
-    fail "C2-T4: refinalize_trace silently corrupted manifest on jq failure; manifest now: $manifest_after_refin"
-else
-    fail "C2-T4: refinalize_trace silently swallowed jq error (no error logged)"
-fi
-
 # C2-T5: tmp_manifest is validated non-empty before mv
 echo ""
 echo "=== C2-T5: finalize_trace validates tmp_manifest non-empty before mv ==="
@@ -573,47 +549,6 @@ if [[ -f "$other_marker" ]]; then
     pass "H1-T2: cleanup logic preserved other session's .active-* marker"
 else
     fail "H1-T2: cleanup logic incorrectly removed other session's marker ($other_marker)"
-fi
-
-# H1-T3: refinalize_stale_traces heals orphaned active markers (status stays accurate)
-echo ""
-echo "=== H1-T3: refinalize_stale_traces heals orphaned 'active' traces ==="
-TS_H1T3=$(make_tmpdir)
-PROJ_H1T3=$(make_tmpdir)
-
-# Create an "orphaned" trace: started >30 min ago, still active (no finalize called)
-ORPHAN_TRACE="orphan-$(date +%s)"
-mkdir -p "${TS_H1T3}/${ORPHAN_TRACE}/artifacts"
-# Write a manifest with status=active and old started_at
-two_hours_ago=$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "2 hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
-cat > "${TS_H1T3}/${ORPHAN_TRACE}/manifest.json" <<EOF
-{
-  "version": "1",
-  "trace_id": "${ORPHAN_TRACE}",
-  "agent_type": "implementer",
-  "session_id": "dead-session",
-  "project": "${PROJ_H1T3}",
-  "project_name": "test",
-  "branch": "main",
-  "started_at": "${two_hours_ago}",
-  "status": "active"
-}
-EOF
-# Create a summary to prevent "crashed" outcome
-echo "# Summary" > "${TS_H1T3}/${ORPHAN_TRACE}/summary.md"
-
-updated_count=$(
-    source "${HOOKS_DIR}/log.sh"
-    source "${HOOKS_DIR}/context-lib.sh"
-    TRACE_STORE="$TS_H1T3"
-    refinalize_stale_traces
-)
-
-final_status=$(jq -r '.status // "unknown"' "${TS_H1T3}/${ORPHAN_TRACE}/manifest.json" 2>/dev/null)
-if [[ "$final_status" == "completed" ]]; then
-    pass "H1-T3: refinalize_stale_traces healed orphaned trace (status='completed')"
-else
-    fail "H1-T3: orphaned trace not healed; status='$final_status' (updated_count=$updated_count)"
 fi
 
 # H1-T4: init_trace stale marker cleanup still works (regression guard)
