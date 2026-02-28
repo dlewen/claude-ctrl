@@ -383,8 +383,8 @@
     "command": "$HOME/.claude/scripts/statusline.sh"
   },
   "autoUpdatesChannel": "latest",
+  "skipDangerousModePermissionPrompt": true,
   "installation": {
     "method": "native"
-  },
-  "skipDangerousModePermissionPrompt": true
+  }
 }

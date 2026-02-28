@@ -104,6 +104,10 @@ project's institutional memory.
 | 2026-02-23 | DEC-META-004 | metanoia | Dual settings files with swap script for rollback | settings-legacy.json + settings-metanoia.json + swap.sh; validates JSON before overwrite |
 | 2026-02-23 | DEC-META-005 | metanoia | Gradual rollout: pre-bash then post-write then pre-write | Safest first (guard.sh denies always exit), highest risk last (pre-write has 6 gates) |
 | 2026-02-23 | DEC-META-006 | metanoia | Bake period: 5+ sessions per rollout stage | Any regression resets stage count; all 3 stages pass bake before merge |
+| 2026-02-26 | DEC-BAZAAR-017 | bazaar-batch-orchestrator | Subprocess composition over module import in orchestrator | Each script is CLI-ready; isolation on crashes; exit codes for pass/fail; turn budget ~14-18 vs ~40 |
+| 2026-02-26 | DEC-BAZAAR-018 | bazaar-batch-orchestrator | extract-allocs as bazaar_prepare.py subcommand | Consistent with existing prepare subcommand pattern; no new script entry points |
+| 2026-02-26 | DEC-BAZAAR-019 | bazaar-batch-orchestrator | SKILL.md rewrite to ~200 lines using orchestrator calls | Agent calls orchestrator 2-3 times total; all data plumbing stays in Python |
+| 2026-02-26 | DEC-BAZAAR-020 | bazaar-batch-orchestrator | Report-and-continue error handling with phase-N-errors.json | Agent decides on retries; orchestrator captures failures without auto-retry |
 
 ---
 
