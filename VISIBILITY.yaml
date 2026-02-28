@@ -57,5 +57,4 @@ public:
 
 # Everything NOT listed above (or without `visibility: public` frontmatter) is private.
 # This includes: scripts/todo.sh, scripts/community-check.sh, observatory/,
-# MASTER_PLAN.md, archived-plans/, settings-legacy.json, settings-metanoia.json,
-# hooks/pre-bash.sh, hooks/pre-write.sh, hooks/post-write.sh, docs/, etc.
+# MASTER_PLAN.md, archived-plans/, docs/, etc.

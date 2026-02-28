@@ -388,7 +388,6 @@ REQ-IDs (`REQ-{CATEGORY}-{NNN}`) are assigned during planning. DEC-IDs link to R
 | `batch-fetch.py` | Cascade-proof multi-URL fetching (use for 3+ URLs) |
 | `lib/keychain.py` | macOS keychain integration for API keys |
 | `release-public.sh` | Public export automation from VISIBILITY.yaml |
-| `swap.sh` | Settings config toggle (Metanoia hook consolidation) |
 
 ---
 

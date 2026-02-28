@@ -93,9 +93,6 @@ State files bridge the gap — hooks communicate with each other through files, 
 │   ├── session-end.sh        # SessionEnd — cleanup
 │   ├── notify.sh             # Notification — permission/idle alerts
 │   ├── state-registry.sh     # State file lifecycle management
-│   ├── pre-bash.sh           # (Metanoia) consolidated PreToolUse:Bash (dormant)
-│   ├── pre-write.sh          # (Metanoia) consolidated PreToolUse:Write|Edit (dormant)
-│   ├── post-write.sh         # (Metanoia) consolidated PostToolUse:Write|Edit (dormant)
 │   ├── context-lib.sh        # Shared library — context builders, state I/O
 │   ├── log.sh                # Shared library — JSON I/O, path utilities
 │   ├── source-lib.sh         # Shared library — bootstrapper for log.sh + context-lib.sh
@@ -130,7 +127,6 @@ State files bridge the gap — hooks communicate with each other through files, 
 │   ├── update-check.sh       # Git-based auto-update
 │   ├── community-check.sh    # Community PR/issue monitor
 │   ├── batch-fetch.py        # Cascade-proof multi-URL fetcher
-│   ├── swap.sh               # Settings config toggle (Metanoia)
 │   └── lib/                  # Shared Python utilities (keychain.py)
 ├── observatory/              # Self-improvement state
 │   ├── state.json            # v3 — pending/implemented/rejected suggestions
@@ -152,9 +148,7 @@ State files bridge the gap — hooks communicate with each other through files, 
 ├── CONTRIBUTING.md           # Contribution guidelines
 ├── SECURITY.md               # Vulnerability reporting
 ├── LICENSE                   # MIT
-├── MASTER_PLAN.md            # Living implementation plan
-├── settings-legacy.json      # Pre-Metanoia settings backup
-└── settings-metanoia.json    # Metanoia consolidated settings (dormant)
+└── MASTER_PLAN.md            # Living implementation plan
 ```
 
 ### Component Diagram

@@ -647,7 +647,7 @@ while IFS= read -r hook; do
     if ! echo "$REGISTERED_HOOKS" | grep -q "^$hook$"; then
         # Exempt utility libraries and dormant Metanoia hooks
         case "$hook" in
-            log.sh|context-lib.sh|source-lib.sh|state-registry.sh|pre-bash.sh|pre-write.sh|post-write.sh)
+            log.sh|context-lib.sh|source-lib.sh|state-registry.sh)
                 ;;
             *)
                 UNREGISTERED_HOOKS+="$hook "

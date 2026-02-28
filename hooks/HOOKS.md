@@ -168,16 +168,6 @@ Format: `PATTERN|SCOPE|WRITER(S)|DESCRIPTION`. Used by `tests/test-state-registr
 to lint hook source files and detect unregistered writes. Scopes: global, per-project
 (keyed by 8-char SHA-256 hash), per-session, trace-global, trace-scoped.
 
-### Metanoia Hooks (dormant)
-
-Three consolidated hooks exist but are not registered in `settings.json`:
-- `pre-bash.sh` — consolidates guard.sh + doc-freshness.sh + auto-review.sh
-- `pre-write.sh` — consolidates test-gate.sh + mock-gate.sh + branch-guard.sh + doc-gate.sh + plan-check.sh + checkpoint.sh
-- `post-write.sh` — consolidates lint.sh + track.sh + code-review.sh + plan-validate.sh + test-runner.sh
-
-Toggle between legacy (individual) and Metanoia (consolidated) configs with
-`scripts/swap.sh`. See `settings-legacy.json` and `settings-metanoia.json`.
-
 ---
 
 ## Execution Order (Session Lifecycle)
