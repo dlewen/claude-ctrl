@@ -70,9 +70,21 @@ plans/
 .subagent-tracker
 .subagent-tracker-*
 .active-worktree-path
+.active-worktree-path-*
 .proof-status
+.proof-status-*
 .cwd-recovery-needed
+.doc-drift
+.plan-drift
+.hook-checksums
+.test-status
 
+# Bazaar output directories (session artifacts)
+bazaar-*/
+
+# One-off assets (not tracked)
+walkthrough-hero.png
+research-log.md
 
 # MCP server configuration (local runtime, user-specific)
 .mcp.json

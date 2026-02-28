@@ -32,7 +32,6 @@ public:
     - run-hooks.sh
     - test-auto-verify.sh
     - test-post-task-autoverify.sh
-    - test-guard.sh
     - test-guard-check5-spaces.sh
     - test-trace-orphan-fix.sh
     - test-skill-visibility.sh
