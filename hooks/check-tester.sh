@@ -274,6 +274,8 @@ if [[ "$AUTO_VERIFIED" == "true" ]]; then
             fi
         fi
         finalize_trace "$AV_TRACE_ID" "$PROJECT_ROOT" "tester" 2>/dev/null || true
+        # Breadcrumb: post-task.sh reads this after finalize_trace deletes the marker
+        echo "${AV_TRACE_ID}" > "${CLAUDE_DIR}/.last-tester-trace" 2>/dev/null || true
     fi
 
     CONTEXT="Tester validation: proof-status=verified (auto-verified)."
@@ -343,21 +345,39 @@ write_statusline_cache "$PROJECT_ROOT"
 ISSUES=()
 CONTEXT=""  # Built after issues are collected; initialized here for early-exit branches
 
-# Layer A: Surface trace context when agent response is short.
-# Short returns are normal under Trace Protocol — only flag when genuinely lost.
+# Layer A: Read + inject trace summary on silent/short return.
 # Note: RESPONSE_TEXT may have been supplemented from summary.md (DEC-V3-001) above;
-# use the original last_assistant_message length check to avoid false negatives.
-# See DEC-SILENT-RETURN-001 in check-guardian.sh for rationale.
+# use the original last_assistant_message length to avoid false negatives.
+#
+# @decision DEC-SILENT-RETURN-004
+# @title Inject trace summary content into additionalContext on tester silent return
+# @status accepted
+# @rationale Same fix as DEC-SILENT-RETURN-002 (check-implementer.sh). Uses
+#   _orig_response_len instead of ${#RESPONSE_TEXT} because RESPONSE_TEXT may
+#   already be supplemented by DEC-V3-001 summary.md fallback above.
 _orig_response_len=$(echo "$AGENT_RESPONSE" | jq -r '.last_assistant_message // .response // empty' 2>/dev/null | wc -c | tr -d ' ')
+_silent_return_context=""
 if [[ "${_orig_response_len:-0}" -lt 50 ]]; then
-    _has_trace="false"
     if [[ -n "$TRACE_DIR" && -f "$TRACE_DIR/summary.md" ]]; then
         _trace_size=$(wc -c < "$TRACE_DIR/summary.md" 2>/dev/null || echo 0)
-        [[ "$_trace_size" -gt 10 ]] && _has_trace="true"
+        if [[ "$_trace_size" -gt 10 ]]; then
+            _trace_content=$(head -c 3000 "$TRACE_DIR/summary.md" 2>/dev/null || echo "")
+            if [[ "${_orig_response_len:-0}" -eq 0 ]]; then
+                _silent_return_context="SILENT RETURN — Tester likely exhausted max_turns. Trace summary:\n${_trace_content}"
+            else
+                _silent_return_context="Short response from tester. Trace summary:\n${_trace_content}"
+            fi
+        fi
     fi
-    if [[ "$_has_trace" == "false" && -z "${RESPONSE_TEXT// /}" ]]; then
+    if [[ -z "${_silent_return_context}" && "${_orig_response_len:-0}" -eq 0 ]]; then
         ISSUES+=("Agent returned no response and no trace summary available. Check git log for what happened.")
     fi
+fi
+
+# Compute _sr_prefix early so it's available for ALL exit paths (including Check 3 INCOMPLETE)
+_sr_prefix=""
+if [[ -n "${_silent_return_context:-}" ]]; then
+    _sr_prefix="SILENT RETURN DETECTED — Tester likely exhausted max_turns.\n${_silent_return_context}\n\n---\n"
 fi
 
 # Check 1b: Flag missing .proof-status
@@ -397,6 +417,8 @@ if [[ -n "$TRACE_DIR" && -d "$TRACE_DIR/artifacts" ]]; then
     if ! finalize_trace "$TRACE_ID" "$PROJECT_ROOT" "tester"; then
         append_audit "$PROJECT_ROOT" "trace_orphan" "finalize_trace failed for tester trace $TRACE_ID"
     fi
+    # Breadcrumb: post-task.sh reads this after finalize_trace deletes the marker
+    echo "${TRACE_ID}" > "${CLAUDE_DIR}/.last-tester-trace" 2>/dev/null || true
 fi
 
 # Check 3: Tester completeness — detect partial/incomplete runs
@@ -451,6 +473,8 @@ if [[ -n "$TRACE_DIR" && -d "$TRACE_DIR" ]]; then
 fi
 
 if [[ "$TESTER_COMPLETE" == "false" ]]; then
+    # Include silent return context so orchestrator has trace info even on early exit
+    [[ -n "$_sr_prefix" ]] && CONTEXT="${_sr_prefix}"
     DIRECTIVE="INCOMPLETE: Tester returned without completing verification (trace outcome: ${TRACE_OUTCOME:-unknown}). Do NOT present confidence levels or approve merge from partial results. Resume the tester to complete verification."
     ESCAPED=$(printf '%s\n\n%s' "$CONTEXT" "$DIRECTIVE" | jq -Rs .)
     cat <<EOF
@@ -493,15 +517,18 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
     fi
 fi
 
-# Build context message
+# Build context message (_sr_prefix computed earlier, after Layer A)
 CONTEXT=""
+if [[ -n "${_sr_prefix:-}" ]]; then
+    CONTEXT="$_sr_prefix"
+fi
 if [[ ${#ISSUES[@]} -gt 0 ]]; then
-    CONTEXT="Tester validation: ${#ISSUES[@]} issue(s)."
+    CONTEXT="${CONTEXT}Tester validation: ${#ISSUES[@]} issue(s)."
     for issue in "${ISSUES[@]}"; do
         CONTEXT+="\n- $issue"
     done
 else
-    CONTEXT="Tester validation: proof-status=$PROOF_STATUS."
+    CONTEXT="${CONTEXT}Tester validation: proof-status=$PROOF_STATUS."
 fi
 
 # Persist findings for next-prompt injection

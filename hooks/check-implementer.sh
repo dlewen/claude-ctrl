@@ -144,16 +144,33 @@ write_statusline_cache "$PROJECT_ROOT"
 
 ISSUES=()
 
-# Layer A: Surface trace context when agent response is short.
-# Short returns are normal under Trace Protocol — only flag when genuinely lost.
-# See DEC-SILENT-RETURN-001 in check-guardian.sh for rationale.
+# Layer A: Read + inject trace summary on silent/short return.
+# When RESPONSE_TEXT is short (<50 chars), the agent likely exhausted max_turns.
+# If summary.md exists (written incrementally per DEC-IMPL-BUDGET-001), read it
+# and inject the content so the orchestrator gets full context automatically.
+#
+# @decision DEC-SILENT-RETURN-002
+# @title Inject trace summary content into additionalContext on silent return
+# @status accepted
+# @rationale The old Layer A only flagged "no response and no trace" — when
+#   summary.md existed but RESPONSE_TEXT was empty, it emitted "validation OK"
+#   with zero signal. The orchestrator then went silent. Fix: read summary.md
+#   content (up to 3000 chars) and prepend it to CONTEXT as "SILENT RETURN
+#   DETECTED". The orchestrator acts on the injected content immediately.
+_silent_return_context=""
 if [[ ${#RESPONSE_TEXT} -lt 50 ]]; then
-    _has_trace="false"
     if [[ -n "$TRACE_DIR" && -f "$TRACE_DIR/summary.md" ]]; then
         _trace_size=$(wc -c < "$TRACE_DIR/summary.md" 2>/dev/null || echo 0)
-        [[ "$_trace_size" -gt 10 ]] && _has_trace="true"
+        if [[ "$_trace_size" -gt 10 ]]; then
+            _trace_content=$(head -c 3000 "$TRACE_DIR/summary.md" 2>/dev/null || echo "")
+            if [[ -z "${RESPONSE_TEXT// /}" ]]; then
+                _silent_return_context="SILENT RETURN — Implementer likely exhausted max_turns. Trace summary:\n${_trace_content}"
+            else
+                _silent_return_context="Short response from implementer. Trace summary:\n${_trace_content}"
+            fi
+        fi
     fi
-    if [[ "$_has_trace" == "false" && -z "${RESPONSE_TEXT// /}" ]]; then
+    if [[ -z "${_silent_return_context}" && -z "${RESPONSE_TEXT// /}" ]]; then
         ISSUES+=("Agent returned no response and no trace summary available. Check git log for what happened.")
     fi
 fi
@@ -247,10 +264,18 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
     fi
 fi
 
+# Prepend silent return context if detected (Layer A)
+if [[ -n "${_silent_return_context:-}" ]]; then
+    _sr_prefix="SILENT RETURN DETECTED — Implementer likely exhausted max_turns.\n${_silent_return_context}\n\n---\n"
+fi
+
 # Build context message
 CONTEXT=""
+if [[ -n "${_sr_prefix:-}" ]]; then
+    CONTEXT="$_sr_prefix"
+fi
 if [[ ${#ISSUES[@]} -gt 0 ]]; then
-    CONTEXT="Implementer validation: ${#ISSUES[@]} issue(s)."
+    CONTEXT+="Implementer validation: ${#ISSUES[@]} issue(s)."
     for issue in "${ISSUES[@]}"; do
         CONTEXT+="\n- $issue"
     done
@@ -258,7 +283,7 @@ if [[ ${#ISSUES[@]} -gt 0 ]]; then
         CONTEXT+="\nFiles needing @decision:\n$MISSING_FILES"
     fi
 else
-    CONTEXT="Implementer validation: branch=$CURRENT_BRANCH, @decision coverage OK."
+    CONTEXT+="Implementer validation: branch=$CURRENT_BRANCH, @decision coverage OK."
 fi
 
 # Log issues to audit trail

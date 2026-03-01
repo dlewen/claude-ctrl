@@ -84,7 +84,7 @@ report, engage in Q&A, user approval triggers prompt-submit.sh gate transition.
 
 **Trace Protocol:** Agents write evidence to disk (TRACE_DIR/artifacts/) and return a cohesive summary of their work (aim for 200-500 tokens). Read TRACE_DIR/summary.md for full details on demand.
 
-**Silent Return Recovery:** When an agent returns with no visible content (empty Task result), the check-*.sh hook injects the trace summary into additionalContext — read it in the system-reminder before acting. If even that is missing, read the latest trace summary directly: `traces/<agent-type>-<latest>/summary.md`. Never proceed blind after an empty agent return — the trace always has context.
+**Silent Return Recovery:** When an agent returns with no visible content, check-*.sh Layer A reads `$TRACE_DIR/summary.md` and injects its content directly into additionalContext (labeled "SILENT RETURN DETECTED"). Agents write summary.md incrementally after each phase, so the last-written version is always available. Act on the injected content — do NOT ask the user to investigate. If additionalContext says "no trace summary available", read the latest trace directly: `ls -t traces/<agent-type>-*/summary.md | head -1`.
 
 **Session Acclimation:** MASTER_PLAN.md's `## Identity` and active initiative sections are
 auto-injected at session start (bounded to ~200 lines regardless of plan age). This provides

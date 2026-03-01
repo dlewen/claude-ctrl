@@ -93,16 +93,29 @@ CONTEXT=""
 INITIATIVE_COUNT=0
 PHASE_COUNT=0
 
-# Layer A: Surface trace context when agent response is short.
-# Short returns are normal under Trace Protocol — only flag when genuinely lost.
-# See DEC-SILENT-RETURN-001 in check-guardian.sh for rationale.
+# Layer A: Read + inject trace summary on silent/short return.
+# When RESPONSE_TEXT is short (<50 chars), the agent likely exhausted max_turns.
+# If summary.md exists, read it and inject into additionalContext.
+#
+# @decision DEC-SILENT-RETURN-003
+# @title Inject trace summary content into additionalContext on planner silent return
+# @status accepted
+# @rationale Same fix as DEC-SILENT-RETURN-002 (check-implementer.sh). The old
+#   Layer A silently passed when summary.md existed but RESPONSE_TEXT was empty.
+_silent_return_context=""
 if [[ ${#RESPONSE_TEXT} -lt 50 ]]; then
-    _has_trace="false"
     if [[ -n "$TRACE_DIR" && -f "$TRACE_DIR/summary.md" ]]; then
         _trace_size=$(wc -c < "$TRACE_DIR/summary.md" 2>/dev/null || echo 0)
-        [[ "$_trace_size" -gt 10 ]] && _has_trace="true"
+        if [[ "$_trace_size" -gt 10 ]]; then
+            _trace_content=$(head -c 3000 "$TRACE_DIR/summary.md" 2>/dev/null || echo "")
+            if [[ -z "${RESPONSE_TEXT// /}" ]]; then
+                _silent_return_context="SILENT RETURN — Planner likely exhausted max_turns. Trace summary:\n${_trace_content}"
+            else
+                _silent_return_context="Short response from planner. Trace summary:\n${_trace_content}"
+            fi
+        fi
     fi
-    if [[ "$_has_trace" == "false" && -z "${RESPONSE_TEXT// /}" ]]; then
+    if [[ -z "${_silent_return_context}" && -z "${RESPONSE_TEXT// /}" ]]; then
         ISSUES+=("Agent returned no response and no trace summary available. Check git log for what happened.")
     fi
 fi
@@ -230,9 +243,17 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
     fi
 fi
 
+# Prepend silent return context if detected (Layer A)
+if [[ -n "${_silent_return_context:-}" ]]; then
+    _sr_prefix="SILENT RETURN DETECTED — Planner likely exhausted max_turns.\n${_silent_return_context}\n\n---\n"
+fi
+
 # Build context message
+if [[ -n "${_sr_prefix:-}" ]]; then
+    CONTEXT="$_sr_prefix"
+fi
 if [[ ${#ISSUES[@]} -gt 0 ]]; then
-    CONTEXT="Planner validation: ${#ISSUES[@]} issue(s) found."
+    CONTEXT="${CONTEXT}Planner validation: ${#ISSUES[@]} issue(s) found."
     for issue in "${ISSUES[@]}"; do
         CONTEXT+="\n- $issue"
     done

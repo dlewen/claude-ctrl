@@ -151,7 +151,7 @@ case "$AGENT_TYPE" in
         # Reset checkpoint counter for fresh session
         rm -f "${CLAUDE_DIR}/.checkpoint-counter"
         if [[ -n "$TRACE_DIR" ]]; then
-            CONTEXT_PARTS+=("TRACE_DIR=$TRACE_DIR — Write verbose output to TRACE_DIR/artifacts/ (test-output.txt, diff.patch, files-changed.txt, proof-evidence.txt). Write TRACE_DIR/summary.md before returning. Keep return message under 1500 tokens.")
+            CONTEXT_PARTS+=("TRACE_DIR=$TRACE_DIR — BUDGET: max_turns=85. Write summary.md after EACH phase (overwrite OK). Last summary.md = recovery artifact if max_turns kills you. Artifacts: test-output.txt, diff.patch, files-changed.txt, proof-evidence.txt. Return: ≤1500 tokens + 'Full trace: $TRACE_DIR'.")
         fi
         ;;
     tester)
