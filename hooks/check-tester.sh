@@ -113,7 +113,7 @@ if [[ "$RESPONSE_LEN" -gt 0 ]]; then
     if [[ "$AV_SIGNAL" -gt 0 ]]; then
         CONF_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci '\*\*High\*\*' 2>/dev/null || echo "0")
         PARTIAL_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci 'Partially verified' 2>/dev/null || echo "0")
-        NOT_TESTED_CHECK=$(echo "$RESPONSE_TEXT" | grep -ciE '(:\s*Not tested|\|\s*Not tested)' 2>/dev/null || echo "0")
+        NOT_TESTED_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci 'Not tested' 2>/dev/null || echo "0")
         echo "check-tester: secondary validation: High=$CONF_CHECK Partial=$PARTIAL_CHECK NotTested=$NOT_TESTED_CHECK" >&2
     fi
 else
@@ -209,34 +209,16 @@ NOT_TESTED_LINES=""
 WHITELISTED_COUNT=0
 
 if [[ "$PROOF_STATUS" == "pending" || "$PROOF_STATUS" == "needs-verification" ]] && echo "$RESPONSE_TEXT" | grep -q 'AUTOVERIFY: CLEAN'; then
-    # --- Extract Verification Assessment section for secondary validation ---
-    # Tester summaries include test descriptions mentioning keywords like
-    # "Medium confidence" or "Partially verified" as test case names. Scoping
-    # validation to the Verification Assessment section eliminates false positives.
-    # See DEC-AV-SECTION-001 in post-task.sh for full rationale.
-    # grep returns exit 1 when no match — || true prevents set -e from killing the script.
-    _CT_VA_START=$(echo "$RESPONSE_TEXT" | grep -n -E '^#{1,3} Verification Assessment' | head -1 | cut -d: -f1 || true)
-    if [[ -n "$_CT_VA_START" ]]; then
-        # Extract from VA heading to EOF. Sub-headings within VA (e.g., "## Confidence: High",
-        # "### Coverage") belong to the assessment and must be included. Stopping at the first
-        # subsequent "##" heading would incorrectly truncate VA sub-headings.
-        _CT_VALIDATION_TEXT=$(echo "$RESPONSE_TEXT" | tail -n +"${_CT_VA_START}")
-        echo "check-tester: extracted Verification Assessment section (${#_CT_VALIDATION_TEXT} chars) for secondary validation" >&2
-    else
-        _CT_VALIDATION_TEXT="$RESPONSE_TEXT"
-        echo "check-tester: no Verification Assessment section found — using full response for validation" >&2
-    fi
-
     # Secondary validation — reject false claims
     # Must have High confidence (markdown bold or plain-text formats)
-    echo "$_CT_VALIDATION_TEXT" | grep -qiE '(\*\*High\*\*|[Cc]onfidence:?\s*High|High confidence)' || AV_FAIL=true
+    echo "$RESPONSE_TEXT" | grep -qiE '(\*\*High\*\*|[Cc]onfidence:?\s*High|High confidence)' || AV_FAIL=true
     # Must NOT have "Partially verified" in coverage
-    echo "$_CT_VALIDATION_TEXT" | grep -qi 'Partially verified' && AV_FAIL=true
+    echo "$RESPONSE_TEXT" | grep -qi 'Partially verified' && AV_FAIL=true
     # Must NOT have non-environmental "Not tested" entries.
     # Environmental gaps (browser viewport, screen reader, physical device, etc.)
     # are whitelisted — they cannot be tested in a headless CLI context and do not
     # indicate incomplete verification of the feature under test.
-    NOT_TESTED_LINES=$(echo "$_CT_VALIDATION_TEXT" | grep -iE '(:\s*Not tested|\|\s*Not tested)' || true)
+    NOT_TESTED_LINES=$(echo "$RESPONSE_TEXT" | grep -i 'Not tested' || true)
     if [[ -n "$NOT_TESTED_LINES" ]]; then
         ENV_PATTERN='requires browser\|requires viewport\|requires screen reader\|requires mobile\|requires physical device\|requires hardware\|requires manual interaction\|requires human interaction\|requires GUI\|requires native app\|requires network'
         NON_ENV_LINES=$(echo "$NOT_TESTED_LINES" | grep -iv "$ENV_PATTERN" || true)
@@ -245,7 +227,7 @@ if [[ "$PROOF_STATUS" == "pending" || "$PROOF_STATUS" == "needs-verification" ]]
         fi
     fi
     # Must NOT have Medium or Low confidence (markdown bold or plain-text formats)
-    echo "$_CT_VALIDATION_TEXT" | grep -qiE '(\*\*(Medium|Low)\*\*|[Cc]onfidence:?\s*(Medium|Low)|(Medium|Low) confidence)' && AV_FAIL=true
+    echo "$RESPONSE_TEXT" | grep -qiE '(\*\*(Medium|Low)\*\*|[Cc]onfidence:?\s*(Medium|Low)|(Medium|Low) confidence)' && AV_FAIL=true
 
     if [[ "$AV_FAIL" == "false" ]]; then
         ENV_PATTERN='requires browser\|requires viewport\|requires screen reader\|requires mobile\|requires physical device\|requires hardware\|requires manual interaction\|requires human interaction\|requires GUI\|requires native app\|requires network'
@@ -548,12 +530,8 @@ EOF
 elif [[ "$PROOF_STATUS" == "pending" ]]; then
     # Auto-verify was attempted above but AV_FAIL was set.
     # Check if AUTOVERIFY signal was present but failed secondary validation.
-    # Only log rejection if Phase 1 was enabled — otherwise post-task.sh handles auto-verify
-    # and logging rejection here would be misleading (auto-verify was never attempted here).
     if echo "$RESPONSE_TEXT" | grep -q 'AUTOVERIFY: CLEAN'; then
-        if [[ "${CLAUDE_ENABLE_SUBAGENT_AUTOVERIFY:-}" == "true" ]]; then
-            append_audit "$PROJECT_ROOT" "auto_verify_rejected" "Tester signaled AUTOVERIFY: CLEAN but secondary validation failed"
-        fi
+        append_audit "$PROJECT_ROOT" "auto_verify_rejected" "Tester signaled AUTOVERIFY: CLEAN but secondary validation failed"
     fi
     DIRECTIVE="TESTER COMPLETE: The tester has presented a verification report with evidence, methodology assessment, and confidence level. Present the full report to the user — do NOT reduce it to a keyword demand. The user can approve (approved, lgtm, looks good, verified, ship it), request more testing, or ask questions. Do NOT tell the user to 'say verified'. Guardian dispatch requires .proof-status = verified (prompt-submit.sh writes this on user approval)."
     ESCAPED=$(printf '%s\n\n%s' "$CONTEXT" "$DIRECTIVE" | jq -Rs .)

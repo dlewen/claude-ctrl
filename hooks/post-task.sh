@@ -185,9 +185,108 @@ if [[ -z "$SUMMARY_TEXT" ]]; then
     exit 0
 fi
 
+# --- Trace finalization: write summary.md if missing and finalize ---
+# Runs after all summary fallbacks resolve, before auto-verify check.
+# In PostToolUse:Task, SubagentStop may not have fired reliably, so we
+# ensure the trace is sealed here on all code paths.
+#
+# @decision DEC-TESTER-ABSORB-002
+# @title Trace finalization in post-task.sh absorbs check-tester.sh Phase 2 logic
+# @status accepted
+# @rationale SubagentStop:tester does not fire reliably. Post-task.sh fires
+#   AFTER every Task tool completion. Finalizing the trace here guarantees that
+#   the trace is sealed even when SubagentStop is skipped. This mirrors the
+#   finalize_trace() call in check-tester.sh lines 390-418.
+if [[ -n "$_AV_TRACE_ID" ]]; then
+    _PT_TRACE_DIR="${TRACE_STORE}/${_AV_TRACE_ID}"
+    if [[ -d "$_PT_TRACE_DIR" ]]; then
+        # Write summary.md from SUMMARY_TEXT if missing or trivially empty
+        _pt_sum_size=$(wc -c < "$_PT_TRACE_DIR/summary.md" 2>/dev/null || echo 0)
+        if [[ ! -f "$_PT_TRACE_DIR/summary.md" ]] || [[ "$_pt_sum_size" -lt 10 ]]; then
+            if [[ -n "$SUMMARY_TEXT" ]]; then
+                echo "$SUMMARY_TEXT" | head -c 4000 > "$_PT_TRACE_DIR/summary.md" 2>/dev/null || true
+                log_info "POST-TASK" "wrote summary.md to trace (was missing/trivially empty)"
+            fi
+        fi
+        finalize_trace "$_AV_TRACE_ID" "$PROJECT_ROOT" "tester" 2>/dev/null || true
+        log_info "POST-TASK" "trace finalized: $_AV_TRACE_ID"
+    fi
+fi
+
 # --- Check for AUTOVERIFY: CLEAN signal ---
 if ! echo "$SUMMARY_TEXT" | grep -q 'AUTOVERIFY: CLEAN'; then
-    log_info "POST-TASK" "AUTOVERIFY: CLEAN not found in summary.md — skipping"
+    log_info "POST-TASK" "AUTOVERIFY: CLEAN not found in summary.md — running completeness check"
+
+    # --- Completeness gate (adapted from check-tester.sh DEC-TESTER-002) ---
+    # In PostToolUse, exit 2 doesn't block — Task already completed.
+    # Instead, inject advisory and write to .agent-findings.
+    #
+    # @decision DEC-TESTER-ABSORB-001
+    # @title Completeness gate in post-task.sh (advisory, not blocking)
+    # @status accepted
+    # @rationale PostToolUse:Task fires AFTER the tester has returned. exit 2
+    #   cannot force resume. Advisory injection alerts the orchestrator that
+    #   the tester may not have finished, preventing premature approval.
+    #   Both signals required (AND logic) — same as check-tester.sh DEC-TESTER-002:
+    #   manifest outcome partial/skipped AND verification-output.txt missing.
+    PT_ISSUES=()
+    PT_TESTER_COMPLETE=true
+    PT_TRACE_OUTCOME=""
+
+    if [[ -n "$_AV_TRACE_ID" ]]; then
+        _PT2_TRACE_DIR="${TRACE_STORE}/${_AV_TRACE_ID}"
+
+        # Read trace outcome from manifest (finalize_trace already ran above)
+        if [[ -f "$_PT2_TRACE_DIR/manifest.json" ]]; then
+            PT_TRACE_OUTCOME=$(jq -r '.outcome // "unknown"' "$_PT2_TRACE_DIR/manifest.json" 2>/dev/null || echo "unknown")
+        fi
+
+        # Check for verification artifact
+        PT_HAS_VERIFICATION=false
+        if [[ -d "$_PT2_TRACE_DIR/artifacts" && -f "$_PT2_TRACE_DIR/artifacts/verification-output.txt" ]]; then
+            PT_HAS_VERIFICATION=true
+        fi
+
+        # Completeness check: partial/skipped + no verification output = incomplete
+        if [[ ("$PT_TRACE_OUTCOME" == "partial" || "$PT_TRACE_OUTCOME" == "skipped") && "$PT_HAS_VERIFICATION" == "false" ]]; then
+            PT_TESTER_COMPLETE=false
+        fi
+
+        # Artifact auto-capture: if verification-output.txt missing but summary has content
+        if [[ -d "$_PT2_TRACE_DIR/artifacts" && ! -f "$_PT2_TRACE_DIR/artifacts/verification-output.txt" ]]; then
+            if [[ -n "$SUMMARY_TEXT" && ${#SUMMARY_TEXT} -gt 100 ]]; then
+                {
+                    echo "# Auto-captured from summary.md by post-task.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                    echo "$SUMMARY_TEXT" | head -c 8000
+                } > "$_PT2_TRACE_DIR/artifacts/verification-output.txt" 2>/dev/null || true
+                log_info "POST-TASK" "auto-captured verification-output.txt from summary.md"
+            fi
+        fi
+    fi
+
+    # Inject advisory for incomplete tester
+    if [[ "$PT_TESTER_COMPLETE" == "false" ]]; then
+        log_info "POST-TASK" "tester incomplete (outcome=${PT_TRACE_OUTCOME}) — injecting advisory"
+        PT_ESCAPED=$(printf 'TESTER INCOMPLETE — trace outcome=%s, verification artifact missing. The tester may not have finished. Review before approving.' \
+            "${PT_TRACE_OUTCOME:-unknown}" | jq -Rs .)
+
+        # Write findings
+        _PT_CLAUDE_DIR=$(get_claude_dir)
+        _PT_FINDINGS="${_PT_CLAUDE_DIR}/.agent-findings"
+        _PT_FINDING="tester|Incomplete tester run (outcome=${PT_TRACE_OUTCOME})"
+        if ! grep -qxF "$_PT_FINDING" "$_PT_FINDINGS" 2>/dev/null; then
+            echo "$_PT_FINDING" >> "$_PT_FINDINGS" 2>/dev/null || true
+        fi
+        append_audit "$PROJECT_ROOT" "tester_incomplete" "post-task: tester trace outcome=${PT_TRACE_OUTCOME}, verification artifact missing"
+
+        cat <<EOF
+{
+  "additionalContext": $PT_ESCAPED
+}
+EOF
+        exit 0
+    fi
+
     exit 0
 fi
 
@@ -282,6 +381,15 @@ if [[ "$AV_FAIL" == "true" ]]; then
     [[ -n "${NON_ENV_LINES:-}" ]] && _AV_REASONS="${_AV_REASONS}non-environmental Not tested; "
     ESCAPED=$(printf 'Auto-verify blocked: %s Manual approval required.' \
         "${_AV_REASONS:-unknown reason}" | jq -Rs .)
+
+    # Persist findings for auto-verify rejection
+    _AV_CLAUDE_DIR=$(get_claude_dir)
+    _AV_FINDINGS="${_AV_CLAUDE_DIR}/.agent-findings"
+    _AV_FINDING="tester|Auto-verify blocked: ${_AV_REASONS:-unknown reason}"
+    if ! grep -qxF "$_AV_FINDING" "$_AV_FINDINGS" 2>/dev/null; then
+        echo "$_AV_FINDING" >> "$_AV_FINDINGS" 2>/dev/null || true
+    fi
+
     cat <<EOF
 {
   "additionalContext": $ESCAPED
@@ -290,26 +398,22 @@ EOF
     exit 0
 fi
 
-# All checks passed — write verified to all three paths
-write_proof_status "verified" "$PROJECT_ROOT"
+# All checks passed — finalize trace and write verified to all three paths
+# Auto-capture verification artifact from summary if missing
+if [[ -n "$_AV_TRACE_ID" ]]; then
+    _AVS_TRACE_DIR="${TRACE_STORE}/${_AV_TRACE_ID}"
+    if [[ -d "$_AVS_TRACE_DIR/artifacts" && ! -f "$_AVS_TRACE_DIR/artifacts/verification-output.txt" ]]; then
+        if [[ -n "$SUMMARY_TEXT" && ${#SUMMARY_TEXT} -gt 100 ]]; then
+            {
+                echo "# Auto-captured from summary.md by post-task.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "$SUMMARY_TEXT" | head -c 8000
+            } > "$_AVS_TRACE_DIR/artifacts/verification-output.txt" 2>/dev/null || true
+            log_info "POST-TASK" "auto-verified: captured verification-output.txt from summary.md"
+        fi
+    fi
+fi
 
-# Pre-create guardian marker to protect verified status during dispatch window.
-# Between this write and the orchestrator dispatching Guardian, any Write/Edit
-# triggers track.sh proof invalidation (no guardian marker exists yet).
-# Creating the marker HERE closes this race window. task-track.sh Gate A
-# overwrites with "pre-dispatch" (harmless), init_trace() overwrites with
-# trace_id (harmless), finalize_trace() cleans all markers (full lifecycle).
-# @decision DEC-AV-GUARDIAN-MARKER-001
-# @title Pre-create guardian marker on auto-verify to protect verified status
-# @status accepted
-# @rationale Between post-task.sh writing verified and the orchestrator dispatching
-#   Guardian, any Write/Edit triggers track.sh proof invalidation (no guardian marker
-#   exists yet). Pre-creating the marker here closes this window. task-track.sh Gate A
-#   overwrites with "pre-dispatch" (harmless), init_trace() overwrites with trace_id
-#   (harmless), finalize_trace() cleans all markers (full lifecycle).
-_AV_SESSION="${CLAUDE_SESSION_ID:-$$}"
-_AV_PHASH=$(project_hash "$PROJECT_ROOT")
-echo "auto-verified|$(date +%s)" > "${TRACE_STORE}/.active-guardian-${_AV_SESSION}-${_AV_PHASH}"
+write_proof_status "verified" "$PROJECT_ROOT"
 
 # Audit trail
 if [[ "${WHITELISTED_COUNT:-0}" -gt 0 ]]; then

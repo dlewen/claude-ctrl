@@ -450,8 +450,6 @@ ${line}"
     # @rationale compact-preserve.sh writes "PLAN FILE: <path>" when a recently-modified
     #   plan exists. Re-injecting it here as a high-priority context part ensures the
     #   post-compaction session knows exactly where to read its implementation plan.
-    #   Pattern B ([[ =~ ]]) avoids grep-in-loop SIGPIPE; `_` prefix avoids namespace
-    #   pollution. Scanning the preserve file before it is renamed keeps the logic simple.
     _PLAN_ANCHOR_PATH=""
     while IFS= read -r _pa_line; do
         if [[ "$_pa_line" =~ ^PLAN\ FILE:\ (.*) ]]; then
@@ -491,7 +489,7 @@ ${line}"
     #   lets us inspect what was preserved after the fact. The .compaction-log
     #   accumulates a structured record (one line per compaction event) that can
     #   be used to diagnose context loss patterns. Format: pipe-delimited for easy
-    #   parsing with cut/awk. `_` prefix avoids namespace pollution.
+    #   parsing with cut/awk.
     _PRESERVE_LAST="${PRESERVE_FILE}.last"
     mv "$PRESERVE_FILE" "$_PRESERVE_LAST"
 
@@ -501,7 +499,7 @@ ${line}"
     _CL_HAS_RESUME="no"
     [[ -n "$RESUME_BLOCK" ]] && _CL_HAS_RESUME="yes"
     _CL_HAS_PLAN="no"
-    [[ -n "$_PLAN_ANCHOR_PATH" ]] && _CL_HAS_PLAN="$_PLAN_ANCHOR_PATH"
+    [[ -n "${_PLAN_ANCHOR_PATH:-}" ]] && _CL_HAS_PLAN="$_PLAN_ANCHOR_PATH"
     echo "${_CL_TIMESTAMP}|${_CL_LINES}|${_CL_HAS_RESUME}|${_CL_HAS_PLAN}" >> "$_COMPACTION_LOG"
 fi
 
@@ -660,6 +658,13 @@ if [[ -x "$TODO_SCRIPT" ]] && command -v gh >/dev/null 2>&1; then
     fi
 fi
 
+# --- Observatory suggestions ---
+OBS_STATE="$HOME/.claude/observatory/state.json"
+if [[ -f "$OBS_STATE" ]]; then
+    OBS_PENDING=$(jq -r 'select(.pending_suggestion != null) | "\(.pending_title) (priority: \(.pending_priority))"' "$OBS_STATE" 2>/dev/null)
+    [[ -n "$OBS_PENDING" ]] && CONTEXT_PARTS+=("Observatory: improvement ready — $OBS_PENDING. Run /observatory to review.")
+fi
+
 # --- Pending agent findings ---
 FINDINGS_FILE="${CLAUDE_DIR}/.agent-findings"
 if [[ -f "$FINDINGS_FILE" && -s "$FINDINGS_FILE" ]]; then
@@ -667,13 +672,6 @@ if [[ -f "$FINDINGS_FILE" && -s "$FINDINGS_FILE" ]]; then
     while IFS= read -r line; do
         CONTEXT_PARTS+=("  $line")
     done < "$FINDINGS_FILE"
-fi
-
-# --- Observatory suggestions ---
-OBS_STATE="$HOME/.claude/observatory/state.json"
-if [[ -f "$OBS_STATE" ]]; then
-    OBS_PENDING=$(jq -r 'select(.pending_suggestion != null) | "\(.pending_title) (priority: \(.pending_priority))"' "$OBS_STATE" 2>/dev/null)
-    [[ -n "$OBS_PENDING" ]] && CONTEXT_PARTS+=("Observatory: improvement ready — $OBS_PENDING. Run /observatory to review.")
 fi
 
 # --- Reset prompt-count so first-prompt fallback re-fires after /clear ---

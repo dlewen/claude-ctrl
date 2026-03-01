@@ -115,8 +115,33 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/pre-write.sh",
-            "timeout": 10
+            "command": "$HOME/.claude/hooks/test-gate.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/mock-gate.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/branch-guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/doc-gate.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/plan-check.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/checkpoint.sh",
+            "timeout": 5
           }
         ]
       },
@@ -125,8 +150,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/pre-bash.sh",
+            "command": "$HOME/.claude/hooks/guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/doc-freshness.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/auto-review.sh",
+            "timeout": 5
           }
         ]
       },
@@ -147,8 +182,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/post-write.sh",
+            "command": "$HOME/.claude/hooks/lint.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/track.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/code-review.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/plan-validate.sh",
+            "timeout": 5
           },
           {
             "type": "command",
@@ -194,7 +244,7 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/post-task.sh",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -300,8 +350,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/stop.sh",
+            "command": "$HOME/.claude/hooks/surface.sh",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-summary.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/forward-motion.sh",
+            "timeout": 5
           }
         ]
       }

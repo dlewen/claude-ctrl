@@ -21,7 +21,6 @@
 #
 # Persists (does NOT delete):
 #   - .audit-log — persistent audit trail
-#   - .agent-findings — pending agent issues
 #   - .lint-breaker — circuit breaker state
 #   - .plan-drift — decision drift data
 #   - .test-status — cleared at session START, not here
@@ -163,25 +162,6 @@ if [[ -f "$SESSION_EVENT_FILE" && -s "$SESSION_EVENT_FILE" ]]; then
     fi
 fi
 
-# --- Age-based .agent-findings cleanup ---
-# Findings accumulate from agent hooks and are surfaced in session-init.
-# Clear stale findings so resolved issues stop re-surfacing.
-# No per-entry timestamp exists, so we age the whole file: if the file is
-# older than 3 days (~3+ sessions), it likely contains stale noise.
-FINDINGS_FILE="${CLAUDE_DIR}/.agent-findings"
-if [[ -f "$FINDINGS_FILE" ]]; then
-    if [[ "$(uname)" == "Darwin" ]]; then
-        FINDINGS_AGE=$(( $(date +%s) - $(stat -f %m "$FINDINGS_FILE" 2>/dev/null || echo "0") ))
-    else
-        FINDINGS_AGE=$(( $(date +%s) - $(stat -c %Y "$FINDINGS_FILE" 2>/dev/null || echo "0") ))
-    fi
-    # Clear if older than 3 days (259200 seconds) — roughly 3+ sessions
-    if [[ "$FINDINGS_AGE" -gt 259200 ]]; then
-        rm -f "$FINDINGS_FILE"
-        log_info "SESSION-END" "Cleaned stale .agent-findings (${FINDINGS_AGE}s old)"
-    fi
-fi
-
 # --- Clean up .active-* trace markers for this session ---
 # Active markers are named .active-TYPE-SESSION_ID. When a session ends normally,
 # finalize_trace() already removes the marker via the SubagentStop hook. But if
@@ -206,6 +186,25 @@ if [[ -n "${CLAUDE_SESSION_ID:-}" && -d "$SESSION_TRACE_STORE" ]]; then
     done
 fi
 
+# --- Age-based .agent-findings cleanup ---
+# Findings accumulate from agent hooks and are surfaced in session-init.
+# Clear stale findings so resolved issues stop re-surfacing.
+# No per-entry timestamp exists, so we age the whole file: if the file is
+# older than 3 days (~3+ sessions), it likely contains stale noise.
+FINDINGS_FILE="${CLAUDE_DIR}/.agent-findings"
+if [[ -f "$FINDINGS_FILE" ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+        FINDINGS_AGE=$(( $(date +%s) - $(stat -f %m "$FINDINGS_FILE" 2>/dev/null || echo "0") ))
+    else
+        FINDINGS_AGE=$(( $(date +%s) - $(stat -c %Y "$FINDINGS_FILE" 2>/dev/null || echo "0") ))
+    fi
+    # Clear if older than 3 days (259200 seconds) — roughly 3+ sessions
+    if [[ "$FINDINGS_AGE" -gt 259200 ]]; then
+        rm -f "$FINDINGS_FILE"
+        log_info "SESSION-END" "Cleaned stale .agent-findings (${FINDINGS_AGE}s old)"
+    fi
+fi
+
 # --- Clean up session-scoped files (these don't persist) ---
 rm -f "${CLAUDE_DIR}/.session-events.jsonl"
 rm -f "${CLAUDE_DIR}/.session-changes"*
@@ -224,9 +223,9 @@ rm -f "${CLAUDE_DIR}/.cwd-recovery-needed"
 
 # DO NOT delete (cross-session state):
 #   .audit-log       — persistent audit trail
-#   .agent-findings  — pending agent issues
 #   .lint-breaker    — circuit breaker state
 #   .plan-drift      — decision drift data from last surface audit
+#   .agent-findings  — pending agent issues (cleared by prompt-submit.sh or age-based)
 # NOTE: .test-status is cleared at session START (session-init.sh), not here.
 # It must survive session-end so session-init can read it for context injection,
 # then clears it to prevent stale results from satisfying the commit gate.

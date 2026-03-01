@@ -19,6 +19,8 @@ set -euo pipefail
 
 source "$(dirname "$0")/source-lib.sh"
 
+enable_fail_closed "task-track"
+
 HOOK_INPUT=$(read_input)
 AGENT_TYPE=$(get_field '.tool_input.subagent_type')
 AGENT_TYPE="${AGENT_TYPE:-unknown}"
@@ -32,25 +34,20 @@ get_git_state "$PROJECT_ROOT"
 get_plan_status "$PROJECT_ROOT"
 write_statusline_cache "$PROJECT_ROOT"
 
-# Emit PreToolUse deny response with reason, then exit.
-deny() {
-    local reason="$1"
-    cat <<EOF
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "$reason"
-  }
-}
-EOF
+# In scan mode: emit all gate declarations and exit cleanly.
+if [[ "${HOOK_GATE_SCAN:-}" == "1" ]]; then
+    declare_gate "guardian-proof-gate" "Guardian requires .proof-status = verified" "deny"
+    declare_gate "tester-impl-gate" "Tester requires implementer to have returned" "advisory"
+    declare_gate "implementer-worktree-gate" "Implementer dispatch activates proof gate" "deny"
+    emit_flush
     exit 0
-}
+fi
 
 # --- Gate A: Guardian requires .proof-status = verified (when active) ---
 # Gate is only active when .proof-status file exists (created by implementer dispatch).
 # Missing file = no implementation in progress = allow (fixes bootstrap deadlock).
 # Checks project-scoped file first, falls back to unscoped for backward compat.
+declare_gate "guardian-proof-gate" "Guardian requires .proof-status = verified" "deny"
 if [[ "$AGENT_TYPE" == "guardian" ]]; then
     _PHASH=$(project_hash "$PROJECT_ROOT")
     SCOPED_PROOF_FILE="${CLAUDE_DIR}/.proof-status-${_PHASH}"
@@ -65,7 +62,7 @@ if [[ "$AGENT_TYPE" == "guardian" ]]; then
     if [[ -n "$PROOF_FILE" && -f "$PROOF_FILE" ]]; then
         PROOF_STATUS=$(cut -d'|' -f1 "$PROOF_FILE")
         if [[ "$PROOF_STATUS" != "verified" ]]; then
-            deny "Cannot dispatch Guardian: proof-of-work is '$PROOF_STATUS' (requires 'verified'). Dispatch tester or complete verification before dispatching Guardian."
+            emit_deny "Cannot dispatch Guardian: proof-of-work is '$PROOF_STATUS' (requires 'verified'). Dispatch tester or complete verification before dispatching Guardian."
         fi
         # Proof is verified — pre-create guardian marker to close dispatch race (Issue #151).
         # track.sh (PostToolUse:Write|Edit) checks .active-guardian-* to skip proof
@@ -95,6 +92,7 @@ fi
 
 # --- Gate B: Tester requires implementer trace (advisory) ---
 # Prevents premature tester dispatch before implementer has returned.
+declare_gate "tester-impl-gate" "Tester requires implementer to have returned" "advisory"
 if [[ "$AGENT_TYPE" == "tester" ]]; then
     IMPL_TRACE=$(detect_active_trace "$PROJECT_ROOT" "implementer" 2>/dev/null || echo "")
     if [[ -n "$IMPL_TRACE" ]]; then
@@ -155,7 +153,7 @@ if [[ "$AGENT_TYPE" == "tester" ]]; then
             fi
 
             if [[ "$IMPL_STATUS" == "active" ]]; then
-                deny "Cannot dispatch tester: implementer trace '$IMPL_TRACE' is still active. Wait for the implementer to return before verifying."
+                emit_deny "Cannot dispatch tester: implementer trace '$IMPL_TRACE' is still active. Wait for the implementer to return before verifying."
             fi
         fi
     fi
@@ -205,6 +203,7 @@ fi
 #   worktree exists, the orchestrator followed the practice (created worktree first).
 #   branch-guard.sh provides primary protection (blocks source edits on main).
 #   This gate is defense-in-depth: deny only when NO worktrees exist at all.
+declare_gate "implementer-worktree-gate" "Implementer dispatch activates proof gate" "deny"
 if [[ "$AGENT_TYPE" == "implementer" ]]; then
     # Gate C.1: Block implementer on main/master (Sacred Practice #2).
     CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
@@ -215,7 +214,7 @@ if [[ "$AGENT_TYPE" == "implementer" ]]; then
         WORKTREE_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
             | grep -c '^worktree ' || echo "0")
         if [[ "$WORKTREE_COUNT" -le 1 ]]; then
-            deny "Cannot dispatch implementer on '$CURRENT_BRANCH' branch. Sacred Practice #2: create a worktree first. Use: git worktree add .worktrees/<name> -b feature/<name>"
+            emit_deny "Cannot dispatch implementer on '$CURRENT_BRANCH' branch. Sacred Practice #2: create a worktree first. Use: git worktree add .worktrees/<name> -b feature/<name>"
         fi
     fi
 
@@ -243,4 +242,5 @@ if [[ "$AGENT_TYPE" == "implementer" ]]; then
     fi
 fi
 
+emit_flush
 exit 0

@@ -261,17 +261,20 @@ else
     CONTEXT="Implementer validation: branch=$CURRENT_BRANCH, @decision coverage OK."
 fi
 
+# Log issues to audit trail
+if [[ ${#ISSUES[@]} -gt 0 ]]; then
+    for issue in "${ISSUES[@]}"; do
+        append_audit "$PROJECT_ROOT" "agent_implementer" "$issue"
+    done
+fi
+
 # Persist findings for next-prompt injection
 if [[ ${#ISSUES[@]} -gt 0 ]]; then
     FINDINGS_FILE="${CLAUDE_DIR}/.agent-findings"
-    mkdir -p "${PROJECT_ROOT}/.claude"
     FINDING="implementer|$(IFS=';'; echo "${ISSUES[*]}")"
     if ! grep -qxF "$FINDING" "$FINDINGS_FILE" 2>/dev/null; then
         echo "$FINDING" >> "$FINDINGS_FILE"
     fi
-    for issue in "${ISSUES[@]}"; do
-        append_audit "$PROJECT_ROOT" "agent_implementer" "$issue"
-    done
 fi
 
 # Output as additionalContext
