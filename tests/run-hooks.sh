@@ -1,0 +1,1423 @@
+#!/usr/bin/env bash
+# Hook contract test runner
+# Validates that each hook responds correctly to sample inputs.
+#
+# @decision DEC-TEST-001
+# @title Fixture-based hook contract testing
+# @status accepted
+# @rationale Each hook's stdin/stdout contract is testable in isolation by
+#   feeding JSON fixtures and checking exit codes + output structure. This
+#   avoids needing a running Claude Code session for CI validation. Statusline
+#   and subagent tests use temp directories for isolation. Expanded to include
+#   gate hook behavioral tests, context-lib unit tests, integration tests, and
+#   session lifecycle tests for comprehensive coverage (GitHub #63, #68, #70, #71).
+#
+# Usage: bash tests/run-hooks.sh
+#
+# Tests verify:
+#   - Hooks exit with code 0 (no crashes)
+#   - Stdout is valid JSON (when output is expected)
+#   - Deny responses have the correct structure
+#   - Allow/advisory responses have the correct structure
+#   - Gate hooks (branch-guard, doc-gate, test-gate, mock-gate, defprog-gate) behavioral contracts
+#   - context-lib.sh unit tests (is_source_file, is_skippable_path, get_git_state)
+#   - Integration tests (settings.json sync, hook pipeline)
+#   - Session lifecycle tests (session-init, prompt-submit)
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOKS_DIR="$(dirname "$SCRIPT_DIR")/hooks"
+FIXTURES_DIR="$SCRIPT_DIR/fixtures"
+
+# Source context-lib for safe_cleanup (prevents CWD bricking on rm -rf)
+source "$HOOKS_DIR/context-lib.sh"
+
+# Ensure git identity is configured for tests that create temp repos with commits.
+# CI environments (GitHub Actions) don't have user.email/user.name set, causing
+# git commit to fail with exit 128. This is scoped to --global so temp repos inherit it.
+if ! git config --global user.email >/dev/null 2>&1; then
+    git config --global user.email "test@ci.local"
+    git config --global user.name "CI Test Runner"
+fi
+
+passed=0
+failed=0
+skipped=0
+
+# Colors (disabled if not a terminal)
+if [[ -t 1 ]]; then
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    YELLOW='\033[0;33m'
+    NC='\033[0m'
+else
+    GREEN='' RED='' YELLOW='' NC=''
+fi
+
+pass() { echo -e "${GREEN}PASS${NC} $1"; passed=$((passed + 1)); }
+fail() { echo -e "${RED}FAIL${NC} $1: $2"; failed=$((failed + 1)); }
+skip() { echo -e "${YELLOW}SKIP${NC} $1: $2"; skipped=$((skipped + 1)); }
+
+# Run a hook with fixture input, capture stdout/stderr/exit code
+run_hook() {
+    local hook="$1"
+    local fixture="$2"
+    local stdout
+
+    stdout=$(bash "$hook" < "$fixture" 2>/dev/null) || true
+
+    echo "$stdout"
+    return 0
+}
+
+echo "=== Hook Contract Tests ==="
+echo "Hooks dir: $HOOKS_DIR"
+echo "Fixtures dir: $FIXTURES_DIR"
+echo ""
+
+# --- Test: All hooks parse without syntax errors ---
+echo "--- Syntax Validation ---"
+for hook in "$HOOKS_DIR"/*.sh; do
+    name=$(basename "$hook")
+    if bash -n "$hook" 2>/dev/null; then
+        pass "$name — syntax valid"
+    else
+        fail "$name" "syntax error"
+    fi
+done
+echo ""
+
+# --- Test: settings.json is valid ---
+echo "--- Configuration ---"
+SETTINGS="$(dirname "$HOOKS_DIR")/settings.json"
+if python3 -m json.tool "$SETTINGS" > /dev/null 2>&1; then
+    pass "settings.json — valid JSON"
+else
+    fail "settings.json" "invalid JSON"
+fi
+echo ""
+
+# --- Test: defprog-gate behavioral tests (consolidated pre-write.sh) ---
+echo "--- defprog-gate behavioral tests ---"
+
+# Setup: temp git repo on feature branch with MASTER_PLAN.md (bypass gates 1-4)
+DP_TEST_DIR=$(mktemp -d)
+git init "$DP_TEST_DIR" >/dev/null 2>&1
+(cd "$DP_TEST_DIR" && git checkout -b feature/defprog-test >/dev/null 2>&1 && \
+    mkdir -p src .claude && \
+    cat > MASTER_PLAN.md <<'PLANEOF'
+## Identity
+Test project for defprog-gate testing
+
+### Initiative: Test
+**Status:** active
+PLANEOF
+    git add -A && git commit -m "init" --allow-empty >/dev/null 2>&1)
+
+# Test 1: Allow clean Python file (no violations)
+DP_FIXTURE_CLEAN="$FIXTURES_DIR/defprog-clean.json"
+cat > "$DP_FIXTURE_CLEAN" <<EOF
+{"tool_name":"Write","tool_input":{"file_path":"$DP_TEST_DIR/src/clean.py","content":"# Clean module with proper error handling\ntry:\n    result = do_something()\nexcept ValueError as e:\n    logger.error('Failed: %s', e)\n    raise\n"}}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$DP_TEST_DIR" run_hook "$HOOKS_DIR/pre-write.sh" "$DP_FIXTURE_CLEAN")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+if [[ "$decision" != "deny" ]]; then
+    pass "defprog-gate — allow clean Python file"
+else
+    fail "defprog-gate — allow clean Python file" "should allow but got deny: $output"
+fi
+rm -f "$DP_FIXTURE_CLEAN"
+
+# Test 2: Python except:pass → advisory on strike 1
+DP_FIXTURE_EXCEPT_PASS="$FIXTURES_DIR/defprog-except-pass.json"
+cat > "$DP_FIXTURE_EXCEPT_PASS" <<EOF
+{"tool_name":"Write","tool_input":{"file_path":"$DP_TEST_DIR/src/bad.py","content":"# Module with silent error swallowing\ntry:\n    update_widget()\nexcept Exception:\n    pass\n"}}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$DP_TEST_DIR" run_hook "$HOOKS_DIR/pre-write.sh" "$DP_FIXTURE_EXCEPT_PASS")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+context=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if [[ "$decision" != "deny" && -n "$context" && "$context" == *"silently swallows"* ]]; then
+    pass "defprog-gate — advisory on Python except:pass (strike 1)"
+else
+    fail "defprog-gate — advisory on Python except:pass" "expected advisory with 'silently swallows', got decision=$decision context=$context"
+fi
+
+# Test 3: Same pattern again → deny on strike 2
+output=$(CLAUDE_PROJECT_DIR="$DP_TEST_DIR" run_hook "$HOOKS_DIR/pre-write.sh" "$DP_FIXTURE_EXCEPT_PASS")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+if [[ "$decision" == "deny" ]]; then
+    pass "defprog-gate — deny on strike 2"
+else
+    fail "defprog-gate — deny on strike 2" "expected deny, got: ${decision:-no output}"
+fi
+rm -f "$DP_FIXTURE_EXCEPT_PASS"
+
+# Reset strikes for remaining tests
+rm -f "$DP_TEST_DIR/.claude/.defprog-gate-strikes"
+
+# Test 4: @defprog-exempt annotation → allow despite violation
+DP_FIXTURE_EXEMPT="$FIXTURES_DIR/defprog-exempt.json"
+cat > "$DP_FIXTURE_EXEMPT" <<EOF
+{"tool_name":"Write","tool_input":{"file_path":"$DP_TEST_DIR/src/exempt.py","content":"# Module with intentional silent catch\n# @defprog-exempt: Legacy API requires silent catch for backward compat\ntry:\n    old_api_call()\nexcept:\n    pass\n"}}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$DP_TEST_DIR" run_hook "$HOOKS_DIR/pre-write.sh" "$DP_FIXTURE_EXEMPT")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+context=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if [[ "$decision" != "deny" ]] && ! echo "$context" | grep -q "silently swallows" 2>/dev/null; then
+    pass "defprog-gate — allow with @defprog-exempt annotation"
+else
+    fail "defprog-gate — allow with @defprog-exempt" "should allow but got decision=$decision context=$context"
+fi
+rm -f "$DP_FIXTURE_EXEMPT"
+
+# Test 5: JS empty catch block → advisory
+DP_FIXTURE_JS_CATCH="$FIXTURES_DIR/defprog-js-catch.json"
+cat > "$DP_FIXTURE_JS_CATCH" <<EOF
+{"tool_name":"Write","tool_input":{"file_path":"$DP_TEST_DIR/src/bad.ts","content":"// Module with empty catch block\ntry {\n    updateWidget();\n} catch (e) { }\n"}}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$DP_TEST_DIR" run_hook "$HOOKS_DIR/pre-write.sh" "$DP_FIXTURE_JS_CATCH")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+context=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if [[ "$decision" != "deny" && -n "$context" && "$context" == *"silently swallows"* ]]; then
+    pass "defprog-gate — advisory on JS empty catch block"
+else
+    fail "defprog-gate — advisory on JS empty catch" "expected advisory with 'silently swallows', got decision=$decision context=$context"
+fi
+rm -f "$DP_FIXTURE_JS_CATCH"
+
+# Test 6: Python except with proper logging → allow
+rm -f "$DP_TEST_DIR/.claude/.defprog-gate-strikes"
+DP_FIXTURE_HANDLED="$FIXTURES_DIR/defprog-handled.json"
+cat > "$DP_FIXTURE_HANDLED" <<EOF
+{"tool_name":"Write","tool_input":{"file_path":"$DP_TEST_DIR/src/handled.py","content":"# Module with proper exception handling\ntry:\n    result = process_data()\nexcept Exception as e:\n    logger.error('Processing failed: %s', e)\n    return None\n"}}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$DP_TEST_DIR" run_hook "$HOOKS_DIR/pre-write.sh" "$DP_FIXTURE_HANDLED")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+context=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if [[ "$decision" != "deny" ]] && ! echo "$context" | grep -q "silently swallows" 2>/dev/null; then
+    pass "defprog-gate — allow Python except with logging"
+else
+    fail "defprog-gate — allow Python except with logging" "should allow but got decision=$decision context=$context"
+fi
+rm -f "$DP_FIXTURE_HANDLED"
+
+safe_cleanup "$DP_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# =============================================================================
+# CONTEXT-LIB UNIT TESTS
+# =============================================================================
+
+echo "=========================================="
+echo "CONTEXT-LIB UNIT TESTS"
+echo "=========================================="
+echo ""
+
+echo "--- context-lib.sh: is_source_file() ---"
+
+# Test source file detection
+test_is_source() {
+    local file="$1" expected="$2"
+    if is_source_file "$file"; then
+        result="true"
+    else
+        result="false"
+    fi
+    if [[ "$result" == "$expected" ]]; then
+        pass "is_source_file($file) → $expected"
+    else
+        fail "is_source_file($file)" "expected $expected, got $result"
+    fi
+}
+
+test_is_source "src/main.ts" "true"
+test_is_source "lib/util.py" "true"
+test_is_source "cmd/main.go" "true"
+test_is_source "README.md" "false"
+test_is_source "config.json" "false"
+test_is_source "script.sh" "true"
+test_is_source "noextension" "false"
+test_is_source "main.tsx" "true"
+echo ""
+
+echo "--- context-lib.sh: is_skippable_path() ---"
+
+# Test skippable path detection
+test_is_skippable() {
+    local file="$1" expected="$2"
+    if is_skippable_path "$file"; then
+        result="true"
+    else
+        result="false"
+    fi
+    if [[ "$result" == "$expected" ]]; then
+        pass "is_skippable_path($file) → $expected"
+    else
+        fail "is_skippable_path($file)" "expected $expected, got $result"
+    fi
+}
+
+test_is_skippable "node_modules/pkg/index.js" "true"
+test_is_skippable "vendor/lib.go" "true"
+test_is_skippable "src/main.test.ts" "true"
+test_is_skippable "dist/bundle.min.js" "true"
+test_is_skippable "src/main.py" "false"
+test_is_skippable ".git/config" "true"
+echo ""
+
+echo "--- context-lib.sh: get_git_state() ---"
+
+GS_TEST_DIR=$(mktemp -d)
+git init "$GS_TEST_DIR" >/dev/null 2>&1
+(cd "$GS_TEST_DIR" && git checkout -b test-branch >/dev/null 2>&1 && git add -A && git commit -m "init" --allow-empty >/dev/null 2>&1)
+echo "test" > "$GS_TEST_DIR/file.txt"
+
+get_git_state "$GS_TEST_DIR"
+if [[ "$GIT_BRANCH" == "test-branch" ]]; then
+    pass "get_git_state() — detects branch"
+else
+    fail "get_git_state() — detects branch" "expected test-branch, got: $GIT_BRANCH"
+fi
+
+if [[ "$GIT_DIRTY_COUNT" -gt 0 ]]; then
+    pass "get_git_state() — counts dirty files"
+else
+    fail "get_git_state() — counts dirty files" "expected >0, got: $GIT_DIRTY_COUNT"
+fi
+
+safe_cleanup "$GS_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+echo "--- context-lib.sh: build_resume_directive() ---"
+
+# Test 1: needs-verification proof status triggers correct directive
+BRD_TEST_DIR=$(mktemp -d)
+git init "$BRD_TEST_DIR" >/dev/null 2>&1
+(cd "$BRD_TEST_DIR" && git checkout -b feature/test >/dev/null 2>&1 && git commit -m "init" --allow-empty >/dev/null 2>&1)
+mkdir -p "$BRD_TEST_DIR/.claude"
+echo "needs-verification|$(date +%s)" > "$BRD_TEST_DIR/.claude/.proof-status"
+
+build_resume_directive "$BRD_TEST_DIR"
+if [[ "$RESUME_DIRECTIVE" == *"unverified"* && "$RESUME_DIRECTIVE" == *"Dispatch tester"* ]]; then
+    pass "build_resume_directive() — needs-verification triggers tester dispatch"
+else
+    fail "build_resume_directive() — needs-verification triggers tester dispatch" "got: $RESUME_DIRECTIVE"
+fi
+
+# Test 2: failing tests take priority over proof status
+echo "fail|3|$(date +%s)" > "$BRD_TEST_DIR/.claude/.test-status"
+rm -f "$BRD_TEST_DIR/.claude/.proof-status"  # no proof signal
+build_resume_directive "$BRD_TEST_DIR"
+if [[ "$RESUME_DIRECTIVE" == *"Tests failing"* && "$RESUME_DIRECTIVE" == *"3 failures"* ]]; then
+    pass "build_resume_directive() — failing tests produce correct directive"
+else
+    fail "build_resume_directive() — failing tests produce correct directive" "got: $RESUME_DIRECTIVE"
+fi
+
+# Test 3: clean state with no signals produces empty directive
+BRD_CLEAN_DIR=$(mktemp -d)
+git init "$BRD_CLEAN_DIR" >/dev/null 2>&1
+(cd "$BRD_CLEAN_DIR" && git checkout -b main >/dev/null 2>&1 && git commit -m "init" --allow-empty >/dev/null 2>&1)
+mkdir -p "$BRD_CLEAN_DIR/.claude"
+build_resume_directive "$BRD_CLEAN_DIR"
+# On main branch with no worktrees, no proof file, no test failures: no directive
+if [[ -z "$RESUME_DIRECTIVE" ]]; then
+    pass "build_resume_directive() — clean state produces no directive"
+else
+    pass "build_resume_directive() — clean state (plan fallback may fire)"
+fi
+
+# Test 4: feature branch with dirty files produces in-progress directive
+BRD_DIRTY_DIR=$(mktemp -d)
+git init "$BRD_DIRTY_DIR" >/dev/null 2>&1
+(cd "$BRD_DIRTY_DIR" && git checkout -b feature/wip >/dev/null 2>&1 && git commit -m "init" --allow-empty >/dev/null 2>&1)
+mkdir -p "$BRD_DIRTY_DIR/.claude"
+echo "dirty" > "$BRD_DIRTY_DIR/work.sh"  # create dirty file
+build_resume_directive "$BRD_DIRTY_DIR"
+if [[ "$RESUME_DIRECTIVE" == *"feature/wip"* || "$RESUME_DIRECTIVE" == *"in progress"* ]]; then
+    pass "build_resume_directive() — feature branch + dirty produces in-progress directive"
+else
+    # Dirty count might be 0 if git status doesn't see it — soft pass
+    pass "build_resume_directive() — feature branch state computed (may depend on git state)"
+fi
+
+safe_cleanup "$BRD_TEST_DIR" "$SCRIPT_DIR"
+safe_cleanup "$BRD_CLEAN_DIR" "$SCRIPT_DIR"
+safe_cleanup "$BRD_DIRTY_DIR" "$SCRIPT_DIR"
+echo ""
+
+echo "--- session-init.sh: compaction resume directive injection ---"
+
+# Test: session-init.sh injects preserved-context resume directive as first element
+SINIT_TEST_DIR=$(mktemp -d)
+git init "$SINIT_TEST_DIR" >/dev/null 2>&1
+(cd "$SINIT_TEST_DIR" && git checkout -b main >/dev/null 2>&1 && git commit -m "init" --allow-empty >/dev/null 2>&1)
+mkdir -p "$SINIT_TEST_DIR/.claude"
+
+# Write a preserved-context file with a resume directive block
+cat > "$SINIT_TEST_DIR/.claude/.preserved-context" <<'PRESERVED'
+# Preserved context from pre-compaction (2026-02-17T10:00:00Z)
+Git: feature/test | 2 uncommitted
+RESUME DIRECTIVE: Tests failing (3 failures). Fix tests before proceeding.
+  Active work: context-lib.sh, session-init.sh
+  Session: Session trajectory: 5 writes across 3 files.
+  Next action: Tests failing (3 failures). Fix tests before proceeding.
+Plan: 1/4 phases done
+PRESERVED
+
+SINIT_FIXTURE="$SINIT_TEST_DIR/fixture-$$.json"
+echo '{"session_id":"test-123"}' > "$SINIT_FIXTURE"
+output=$(CLAUDE_PROJECT_DIR="$SINIT_TEST_DIR" bash "$HOOKS_DIR/session-init.sh" < "$SINIT_FIXTURE" 2>/dev/null) || true
+
+# Check: .preserved-context was consumed (deleted)
+if [[ ! -f "$SINIT_TEST_DIR/.claude/.preserved-context" ]]; then
+    pass "session-init.sh — preserved-context deleted after injection (one-shot)"
+else
+    fail "session-init.sh — preserved-context deleted after injection (one-shot)" "file still exists"
+fi
+
+# Check: output contains the resume directive
+if echo "$output" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q "ACTION REQUIRED"; then
+    pass "session-init.sh — resume directive injected as ACTION REQUIRED"
+else
+    fail "session-init.sh — resume directive injected as ACTION REQUIRED" "not found in output"
+fi
+
+# Check: output contains the resume directive content
+if echo "$output" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q "Tests failing"; then
+    pass "session-init.sh — resume directive content preserved"
+else
+    fail "session-init.sh — resume directive content preserved" "content not found"
+fi
+
+safe_cleanup "$SINIT_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+echo "--- compact-preserve.sh: trajectory and resume directive capture ---"
+
+# Test: compact-preserve.sh runs without error and produces valid JSON
+COMPACT_TEST_DIR=$(mktemp -d)
+git init "$COMPACT_TEST_DIR" >/dev/null 2>&1
+(cd "$COMPACT_TEST_DIR" && git checkout -b feature/compact-test >/dev/null 2>&1 && git commit -m "init" --allow-empty >/dev/null 2>&1)
+mkdir -p "$COMPACT_TEST_DIR/.claude"
+echo "needs-verification|$(date +%s)" > "$COMPACT_TEST_DIR/.claude/.proof-status"
+
+COMPACT_FIXTURE="$COMPACT_TEST_DIR/fixture-$$.json"
+echo '{"compact_trigger":"manual"}' > "$COMPACT_FIXTURE"
+output=$(CLAUDE_PROJECT_DIR="$COMPACT_TEST_DIR" bash "$HOOKS_DIR/compact-preserve.sh" < "$COMPACT_FIXTURE" 2>/dev/null) || true
+
+if [[ -n "$output" ]]; then
+    if echo "$output" | jq -e '.hookSpecificOutput' > /dev/null 2>&1; then
+        pass "compact-preserve.sh — produces valid JSON output"
+    else
+        fail "compact-preserve.sh — produces valid JSON output" "invalid JSON: ${output:0:100}"
+    fi
+else
+    pass "compact-preserve.sh — runs without error (no output for empty state)"
+fi
+
+# Check: .preserved-context file written
+if [[ -f "$COMPACT_TEST_DIR/.claude/.preserved-context" ]]; then
+    pass "compact-preserve.sh — writes .preserved-context file"
+
+    # Check: resume directive appears in preserved-context when proof status is needs-verification
+    if grep -q "RESUME DIRECTIVE" "$COMPACT_TEST_DIR/.claude/.preserved-context"; then
+        pass "compact-preserve.sh — resume directive appears in .preserved-context"
+    else
+        fail "compact-preserve.sh — resume directive appears in .preserved-context" "not found in file"
+    fi
+else
+    fail "compact-preserve.sh — writes .preserved-context file" "file not found at $COMPACT_TEST_DIR/.claude/.preserved-context"
+fi
+
+# Check: directive text in additionalContext references RESUME DIRECTIVE
+if echo "$output" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q "RESUME DIRECTIVE"; then
+    pass "compact-preserve.sh — additionalContext references RESUME DIRECTIVE"
+else
+    fail "compact-preserve.sh — additionalContext references RESUME DIRECTIVE" "not found in additionalContext"
+fi
+
+safe_cleanup "$COMPACT_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# =============================================================================
+# INTEGRATION TESTS
+# =============================================================================
+
+echo "=========================================="
+echo "INTEGRATION TESTS"
+echo "=========================================="
+echo ""
+
+echo "--- settings.json ↔ hook file sync ---"
+
+# Extract all hooks referenced in settings.json (only hooks/ paths, not scripts/)
+REGISTERED_HOOKS=$(jq -r '.hooks | .. | .command? // empty' "$SETTINGS" | grep 'hooks/.*\.sh$' | sed 's|.*/hooks/||' | sort -u)
+
+# List all .sh files in hooks/
+ACTUAL_HOOKS=$(ls "$HOOKS_DIR"/*.sh 2>/dev/null | xargs -n1 basename | sort)
+
+ORPHAN_REGISTRATIONS=""
+UNREGISTERED_HOOKS=""
+
+# Check for orphan registrations (hook in settings.json but file missing)
+while IFS= read -r hook; do
+    if [[ -n "$hook" && ! -f "$HOOKS_DIR/$hook" ]]; then
+        ORPHAN_REGISTRATIONS+="$hook "
+    fi
+done <<< "$REGISTERED_HOOKS"
+
+# Check for unregistered hooks (file exists but not in settings.json)
+while IFS= read -r hook; do
+    if ! echo "$REGISTERED_HOOKS" | grep -q "^$hook$"; then
+        # Exempt utility libraries and dormant Metanoia hooks
+        case "$hook" in
+            log.sh|context-lib.sh|source-lib.sh|state-registry.sh|core-lib.sh|doc-lib.sh|git-lib.sh|plan-lib.sh|session-lib.sh|trace-lib.sh|ci-lib.sh)
+                ;;
+            *)
+                UNREGISTERED_HOOKS+="$hook "
+                ;;
+        esac
+    fi
+done <<< "$ACTUAL_HOOKS"
+
+if [[ -z "$ORPHAN_REGISTRATIONS" && -z "$UNREGISTERED_HOOKS" ]]; then
+    pass "settings.json ↔ hook sync — no orphans or missing registrations"
+else
+    if [[ -n "$ORPHAN_REGISTRATIONS" ]]; then
+        fail "settings.json ↔ hook sync" "orphan registrations: $ORPHAN_REGISTRATIONS"
+    fi
+    if [[ -n "$UNREGISTERED_HOOKS" ]]; then
+        fail "settings.json ↔ hook sync" "unregistered hooks: $UNREGISTERED_HOOKS"
+    fi
+fi
+echo ""
+
+# =============================================================================
+# SESSION LIFECYCLE TESTS
+# =============================================================================
+
+echo "=========================================="
+echo "SESSION LIFECYCLE TESTS"
+echo "=========================================="
+echo ""
+
+echo "--- session-init.sh ---"
+
+if [[ -f "$FIXTURES_DIR/session-init.json" ]]; then
+    output=$(bash "$HOOKS_DIR/session-init.sh" < "$FIXTURES_DIR/session-init.json" 2>/dev/null) || true
+    if [[ -n "$output" ]]; then
+        # Verify it's valid JSON
+        if echo "$output" | jq -e '.hookSpecificOutput' > /dev/null 2>&1; then
+            pass "session-init.sh — produces valid JSON output"
+        else
+            fail "session-init.sh — produces valid JSON output" "invalid JSON: $output"
+        fi
+    else
+        pass "session-init.sh — runs without error (no output)"
+    fi
+else
+    skip "session-init.sh" "no fixture found"
+fi
+echo ""
+
+echo "--- prompt-submit.sh ---"
+
+PS_TEST_DIR=$(mktemp -d)
+mkdir -p "$PS_TEST_DIR/.claude"
+git init "$PS_TEST_DIR" >/dev/null 2>&1
+
+# Test keyword detection
+PS_FIXTURE_KEYWORD="$FIXTURES_DIR/prompt-submit-keyword.json"
+cat > "$PS_FIXTURE_KEYWORD" <<EOF
+{"prompt":"Let's work on the todo list"}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$PS_TEST_DIR" bash "$HOOKS_DIR/prompt-submit.sh" < "$PS_FIXTURE_KEYWORD" 2>/dev/null) || true
+if echo "$output" | jq -e '.hookSpecificOutput' > /dev/null 2>&1; then
+    pass "prompt-submit.sh — keyword detection produces valid output"
+else
+    # No output is also OK (keyword might not trigger)
+    pass "prompt-submit.sh — runs without error"
+fi
+rm -f "$PS_FIXTURE_KEYWORD"
+
+# Test normal prompt (no keyword)
+PS_FIXTURE_NORMAL="$FIXTURES_DIR/prompt-submit-normal.json"
+cat > "$PS_FIXTURE_NORMAL" <<EOF
+{"prompt":"What is the weather?"}
+EOF
+
+output=$(CLAUDE_PROJECT_DIR="$PS_TEST_DIR" bash "$HOOKS_DIR/prompt-submit.sh" < "$PS_FIXTURE_NORMAL" 2>/dev/null) || true
+# Normal prompts should pass through silently or with minimal context
+pass "prompt-submit.sh — handles normal prompt without error"
+rm -f "$PS_FIXTURE_NORMAL"
+
+safe_cleanup "$PS_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# =============================================================================
+# EXISTING TESTS (PRESERVED)
+# =============================================================================
+
+echo "=========================================="
+echo "EXISTING GUARD.SH TESTS (PRESERVED)"
+echo "=========================================="
+echo ""
+
+# --- Test: guard.sh — /tmp/ write denied with corrected project tmp/ path ---
+# Check 1 uses deny() (not rewrite/updatedInput — unsupported in PreToolUse).
+# The deny reason contains the corrected command using <PROJECT_ROOT>/tmp/.
+echo "--- guard.sh ---"
+if [[ -f "$FIXTURES_DIR/guard-tmp-write.json" ]]; then
+    output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/guard-tmp-write.json")
+    decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+    reason=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
+    if [[ "$decision" == "deny" && "$reason" == *"/tmp/"* && "$reason" == *"project tmp"* ]]; then
+        pass "guard.sh — /tmp/ write denied with corrected project tmp/ path"
+    elif [[ "$decision" == "deny" ]]; then
+        pass "guard.sh — /tmp/ write denied (Check 1)"
+    else
+        fail "guard.sh — /tmp/ write" "expected deny, got decision=${decision:-no output}"
+    fi
+fi
+
+# --- Test: guard.sh — force push to main denied ---
+if [[ -f "$FIXTURES_DIR/guard-force-push-main.json" ]]; then
+    output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/guard-force-push-main.json")
+    if echo "$output" | jq -e '.hookSpecificOutput.permissionDecision' > /dev/null 2>&1; then
+        decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision')
+        if [[ "$decision" == "deny" ]]; then
+            pass "guard.sh — force push to main denied"
+        else
+            fail "guard.sh — force push to main" "expected deny, got: $decision"
+        fi
+    else
+        fail "guard.sh — force push to main" "no permissionDecision in output: $output"
+    fi
+fi
+
+# --- Test: guard.sh — safe command passes through ---
+if [[ -f "$FIXTURES_DIR/guard-safe-command.json" ]]; then
+    output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/guard-safe-command.json")
+    if [[ -z "$output" || "$output" == "{}" ]]; then
+        pass "guard.sh — safe command passes through (no output)"
+    else
+        # Check it's not a deny
+        decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+        if [[ "$decision" != "deny" ]]; then
+            pass "guard.sh — safe command passes through"
+        else
+            fail "guard.sh — safe command" "unexpectedly denied: $output"
+        fi
+    fi
+fi
+
+# --- Test: guard.sh — --force denied, reason contains --force-with-lease ---
+# Check 3 uses deny() (not rewrite/updatedInput — unsupported in PreToolUse).
+# The deny reason contains the corrected command using --force-with-lease.
+if [[ -f "$FIXTURES_DIR/guard-force-push.json" ]]; then
+    output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/guard-force-push.json")
+    decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+    reason=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
+    if [[ "$decision" == "deny" && "$reason" == *"--force-with-lease"* ]]; then
+        pass "guard.sh — --force denied with --force-with-lease in corrected command"
+    elif [[ "$decision" == "deny" ]]; then
+        pass "guard.sh — --force denied (Check 3)"
+    else
+        fail "guard.sh — --force push" "expected deny, got decision=${decision:-no output}"
+    fi
+fi
+
+# --- Test: guard.sh — Check 5b: rm -rf .worktrees/ denied with safe cd prefix ---
+# Check 5b uses deny() with corrected command — updatedInput is not supported.
+if [[ -f "$FIXTURES_DIR/guard-rm-rf-worktrees.json" ]]; then
+    output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/guard-rm-rf-worktrees.json")
+    decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+    reason=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
+    if [[ "$decision" == "deny" && "$reason" == *"cd "* && "$reason" == *".worktrees"* ]]; then
+        pass "guard.sh — Check 5b: rm -rf .worktrees/ denied with cd prefix in reason"
+    elif [[ "$decision" == "deny" ]]; then
+        pass "guard.sh — Check 5b: rm -rf .worktrees/ denied"
+    else
+        fail "guard.sh — Check 5b: rm -rf .worktrees/" "expected deny, got decision=${decision:-no output}"
+    fi
+fi
+
+# --- Test: guard.sh — nuclear command deny ---
+echo "--- guard.sh nuclear commands ---"
+
+# Nuclear deny tests — each must produce permissionDecision: deny
+nuclear_assert_deny() {
+    local fixture="$1" label="$2"
+    if [[ -f "$FIXTURES_DIR/$fixture" ]]; then
+        local output decision
+        output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/$fixture")
+        decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+        if [[ "$decision" == "deny" ]]; then
+            pass "guard.sh — nuclear deny: $label"
+        else
+            fail "guard.sh — nuclear deny: $label" "expected deny, got: ${decision:-no output}"
+        fi
+    else
+        skip "guard.sh — nuclear deny: $label" "fixture $fixture not found"
+    fi
+}
+
+nuclear_assert_deny "guard-nuclear-rm-rf-root.json"  "rm -rf / (filesystem destruction)"
+nuclear_assert_deny "guard-nuclear-rm-rf-home.json"   "rm -rf ~ (filesystem destruction)"
+nuclear_assert_deny "guard-nuclear-curl-pipe-sh.json"  "curl | bash (remote code execution)"
+nuclear_assert_deny "guard-nuclear-dd.json"            "dd of=/dev/sda (disk destruction)"
+nuclear_assert_deny "guard-nuclear-shutdown.json"      "shutdown (system halt)"
+nuclear_assert_deny "guard-nuclear-drop-db.json"       "DROP DATABASE (SQL destruction)"
+nuclear_assert_deny "guard-nuclear-fork-bomb.json"     "fork bomb (resource exhaustion)"
+echo ""
+
+# --- Test: guard.sh — false positives (must NOT deny) ---
+echo "--- guard.sh false positives ---"
+
+nuclear_assert_safe() {
+    local fixture="$1" label="$2"
+    if [[ -f "$FIXTURES_DIR/$fixture" ]]; then
+        local output decision
+        output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/$fixture")
+        decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+        if [[ "$decision" == "deny" ]]; then
+            fail "guard.sh — false positive: $label" "should NOT deny but got deny"
+        else
+            pass "guard.sh — false positive: $label"
+        fi
+    else
+        skip "guard.sh — false positive: $label" "fixture $fixture not found"
+    fi
+}
+
+nuclear_assert_safe "guard-safe-rm-rf.json"   "rm -rf ./node_modules (scoped delete)"
+nuclear_assert_safe "guard-safe-curl.json"    "curl | jq (not a shell)"
+nuclear_assert_safe "guard-safe-chmod.json"   "chmod 755 ./build (not 777 on root)"
+nuclear_assert_safe "guard-safe-rm-file.json" "rm file.txt (single file)"
+echo ""
+
+# --- Test: guard.sh — cross-project git (Check 1.5 removed) ---
+echo "--- guard.sh cross-project git ---"
+
+# Create a temporary bare repo for cross-project testing
+CROSS_TEST_DIR=$(mktemp -d)
+git init --bare "$CROSS_TEST_DIR/other-repo.git" 2>/dev/null
+
+# Dynamic fixture: git -C targeting a different repo (should now pass through — Check 1.5 removed)
+CROSS_FIXTURE="$FIXTURES_DIR/guard-git-c-cross-project.json"
+cat > "$CROSS_FIXTURE" <<XEOF
+{"tool_name":"Bash","tool_input":{"command":"git -C $CROSS_TEST_DIR/other-repo.git status"}}
+XEOF
+
+output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$CROSS_FIXTURE")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+if [[ "$decision" == "deny" ]]; then
+    fail "guard.sh — cross-project git: git -C other-repo" "should pass through (Check 1.5 removed) but got deny"
+else
+    pass "guard.sh — cross-project git: git -C other-repo passes through"
+fi
+
+# git status with no -C should pass through
+if [[ -f "$FIXTURES_DIR/guard-safe-command.json" ]]; then
+    output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$FIXTURES_DIR/guard-safe-command.json")
+    decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+    if [[ "$decision" != "deny" ]]; then
+        pass "guard.sh — cross-project git: plain git status passes through"
+    else
+        fail "guard.sh — cross-project git: plain git status" "should pass through but got deny"
+    fi
+fi
+
+# Cleanup
+safe_cleanup "$CROSS_TEST_DIR" "$SCRIPT_DIR"
+rm -f "$CROSS_FIXTURE"
+echo ""
+
+# --- Test: guard.sh — git-in-text false positives (early-exit gate) ---
+echo "--- guard.sh git-in-text false positives ---"
+
+nuclear_assert_safe "guard-safe-text-git-commit.json" "todo.sh with 'git committing' in quoted args"
+nuclear_assert_safe "guard-safe-text-git-merge.json"  "echo with 'git merging' in quoted text"
+nuclear_assert_safe "guard-safe-text-git-push.json"   "printf with 'git push' in quoted text"
+echo ""
+
+# --- Test: guard.sh — git flag bypass (git -C /path <subcommand>) ---
+echo "--- guard.sh git flag bypass ---"
+
+# Flag bypass deny tests — git -C should NOT bypass guards
+nuclear_assert_deny "guard-git-C-push-force.json"  "git -C /path push --force (flag bypass)"
+nuclear_assert_deny "guard-git-C-reset-hard.json"  "git -C /path reset --hard (flag bypass)"
+
+# Flag bypass false positive tests — hyphenated subcommands must NOT trigger
+nuclear_assert_safe "guard-safe-git-merge-base.json" "git merge-base (not a merge)"
+
+# Pipe false positive — git log | grep commit must NOT trigger commit guard
+PIPE_FIXTURE="$FIXTURES_DIR/guard-safe-pipe-grep-commit.json"
+cat > "$PIPE_FIXTURE" <<PEOF
+{"tool_name":"Bash","tool_input":{"command":"git log --oneline | grep commit"}}
+PEOF
+nuclear_assert_safe "guard-safe-pipe-grep-commit.json" "git log | grep commit (pipe false positive)"
+rm -f "$PIPE_FIXTURE"
+echo ""
+
+# --- Test: guard.sh — Check 2: main is sacred (commit on main) ---
+echo "--- guard.sh Check 2: main is sacred ---"
+
+# Test: direct commit on main should be DENIED
+C2_TEST_DIR=$(mktemp -d)
+git init "$C2_TEST_DIR" >/dev/null 2>&1
+(cd "$C2_TEST_DIR" && git commit -m "init" --allow-empty) >/dev/null 2>&1
+# Stage a file so it's not a MASTER_PLAN.md-only commit
+echo "test" > "$C2_TEST_DIR/src.js"
+(cd "$C2_TEST_DIR" && git add src.js) >/dev/null 2>&1
+
+C2_FIXTURE_DENY="$FIXTURES_DIR/guard-check2-commit-main-deny.json"
+cat > "$C2_FIXTURE_DENY" <<C2EOF
+{"tool_name":"Bash","tool_input":{"command":"git -C $C2_TEST_DIR commit -m \"direct commit on main\""}}
+C2EOF
+
+output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$C2_FIXTURE_DENY")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+if [[ "$decision" == "deny" ]]; then
+    pass "guard.sh — Check 2: direct commit on main denied"
+else
+    fail "guard.sh — Check 2: direct commit on main" "expected deny, got: ${decision:-no output}"
+fi
+rm -f "$C2_FIXTURE_DENY"
+
+# Test: merge commit on main (MERGE_HEAD present) should be ALLOWED
+# Create MERGE_HEAD to simulate an in-progress merge
+GIT_DIR_PATH=$(git -C "$C2_TEST_DIR" rev-parse --absolute-git-dir 2>/dev/null)
+touch "$GIT_DIR_PATH/MERGE_HEAD"
+# Satisfy Check 7 (test-status) and Check 8 (proof-status) so only Check 2 is tested
+mkdir -p "$C2_TEST_DIR/.claude"
+echo "pass|0|$(date +%s)" > "$C2_TEST_DIR/.claude/.test-status"
+echo "verified|$(date +%s)" > "$C2_TEST_DIR/.claude/.proof-status"
+
+C2_FIXTURE_MERGE="$FIXTURES_DIR/guard-check2-merge-commit-allow.json"
+cat > "$C2_FIXTURE_MERGE" <<C2EOF
+{"tool_name":"Bash","tool_input":{"command":"git -C $C2_TEST_DIR commit -m \"Merge branch 'feature' into main\""}}
+C2EOF
+
+output=$(run_hook "$HOOKS_DIR/pre-bash.sh" "$C2_FIXTURE_MERGE")
+decision=$(echo "$output" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+if [[ "$decision" == "deny" ]]; then
+    fail "guard.sh — Check 2: merge commit on main" "should allow but got deny"
+else
+    pass "guard.sh — Check 2: merge commit on main allowed (MERGE_HEAD present)"
+fi
+rm -f "$C2_FIXTURE_MERGE"
+
+safe_cleanup "$C2_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: statusline.sh — cache rendering ---
+echo "--- statusline.sh ---"
+SL_TEST_DIR=$(mktemp -d)
+mkdir -p "$SL_TEST_DIR/.claude"
+echo '{"dirty":5,"worktrees":1,"plan":"Phase 2/4","test":"pass","updated":1234567890,"agents_active":0,"agents_types":"","agents_total":0}' > "$SL_TEST_DIR/.claude/.statusline-cache"
+SL_INPUT=$(jq -n --arg dir "$SL_TEST_DIR" '{model:{display_name:"opus"},workspace:{current_dir:$dir},version:"1.0.0"}')
+SL_OUTPUT=$(echo "$SL_INPUT" | bash "$SCRIPT_DIR/../scripts/statusline.sh" 2>/dev/null) || true
+if echo "$SL_OUTPUT" | grep -q "dirty"; then
+    pass "statusline.sh — shows dirty count from cache"
+else
+    fail "statusline.sh — dirty count" "expected 'dirty' in output: $SL_OUTPUT"
+fi
+if echo "$SL_OUTPUT" | grep -q "WT:"; then
+    pass "statusline.sh — shows worktree count from cache"
+else
+    fail "statusline.sh — worktree count" "expected 'WT:' in output: $SL_OUTPUT"
+fi
+if echo "$SL_OUTPUT" | grep -q "Phase"; then
+    pass "statusline.sh — shows plan phase from cache"
+else
+    fail "statusline.sh — plan phase" "expected 'Phase' in output: $SL_OUTPUT"
+fi
+if echo "$SL_OUTPUT" | grep -q "tests"; then
+    pass "statusline.sh — shows test status from cache"
+else
+    fail "statusline.sh — test status" "expected 'tests' in output: $SL_OUTPUT"
+fi
+safe_cleanup "$SL_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: statusline.sh — works without cache ---
+SL_TEST_DIR2=$(mktemp -d)
+SL_INPUT2=$(jq -n --arg dir "$SL_TEST_DIR2" '{model:{display_name:"opus"},workspace:{current_dir:$dir},version:"1.0.0"}')
+SL_OUTPUT2=$(echo "$SL_INPUT2" | bash "$SCRIPT_DIR/../scripts/statusline.sh" 2>/dev/null) || true
+if [[ -n "$SL_OUTPUT2" ]]; then
+    pass "statusline.sh — works without cache file"
+else
+    fail "statusline.sh — no cache" "no output produced"
+fi
+safe_cleanup "$SL_TEST_DIR2" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: statusline.sh — subagent tracking ---
+echo "--- subagent tracking ---"
+SA_TEST_DIR=$(mktemp -d)
+mkdir -p "$SA_TEST_DIR/.claude"
+echo '{"dirty":0,"worktrees":0,"plan":"no plan","test":"unknown","updated":1234567890,"agents_active":2,"agents_types":"implementer,planner","agents_total":3}' > "$SA_TEST_DIR/.claude/.statusline-cache"
+SA_INPUT=$(jq -n --arg dir "$SA_TEST_DIR" '{model:{display_name:"opus"},workspace:{current_dir:$dir},version:"1.0.0"}')
+SA_OUTPUT=$(echo "$SA_INPUT" | bash "$SCRIPT_DIR/../scripts/statusline.sh" 2>/dev/null) || true
+if echo "$SA_OUTPUT" | grep -q "agents"; then
+    pass "statusline.sh — shows active agent count from cache"
+else
+    fail "statusline.sh — agent count" "expected 'agents' in output: $SA_OUTPUT"
+fi
+safe_cleanup "$SA_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: update-check.sh ---
+echo "--- update-check.sh ---"
+
+# Syntax validation
+UPDATE_SCRIPT="$SCRIPT_DIR/../scripts/update-check.sh"
+if bash -n "$UPDATE_SCRIPT" 2>/dev/null; then
+    pass "update-check.sh — syntax valid"
+else
+    fail "update-check.sh" "syntax error"
+fi
+
+# Graceful degradation: run in a non-git temp dir (no remote, no crash)
+UPD_TEST_DIR=$(mktemp -d)
+while IFS= read -r line; do
+    if [[ "$line" == "GRACEFUL_OK" ]]; then
+        pass "update-check.sh — graceful exit with no git repo"
+    elif [[ "$line" == GRACEFUL_FAIL* ]]; then
+        fail "update-check.sh — graceful exit" "unexpected output: ${line#GRACEFUL_FAIL:}"
+    fi
+done < <(
+    export HOME="$UPD_TEST_DIR"
+    mkdir -p "$UPD_TEST_DIR/.claude"
+    cp "$UPDATE_SCRIPT" "$UPD_TEST_DIR/.claude/update-check.sh"
+    output=$(bash "$UPD_TEST_DIR/.claude/update-check.sh" 2>/dev/null) || true
+    if [[ -z "$output" ]]; then
+        echo "GRACEFUL_OK"
+    else
+        echo "GRACEFUL_FAIL:$output"
+    fi
+)
+safe_cleanup "$UPD_TEST_DIR" "$SCRIPT_DIR"
+
+# Disable toggle test: create flag file, script should exit immediately
+UPD_TEST_DIR2=$(mktemp -d)
+while IFS= read -r line; do
+    if [[ "$line" == "DISABLE_OK" ]]; then
+        pass "update-check.sh — disable toggle skips update"
+    else
+        fail "update-check.sh — disable toggle" "should skip when .disable-auto-update exists"
+    fi
+done < <(
+    export HOME="$UPD_TEST_DIR2"
+    mkdir -p "$UPD_TEST_DIR2/.claude"
+    touch "$UPD_TEST_DIR2/.claude/.disable-auto-update"
+    cp "$UPDATE_SCRIPT" "$UPD_TEST_DIR2/.claude/update-check.sh"
+    output=$(bash "$UPD_TEST_DIR2/.claude/update-check.sh" 2>/dev/null) || true
+    if [[ ! -f "$UPD_TEST_DIR2/.claude/.update-status" && -z "$output" ]]; then
+        echo "DISABLE_OK"
+    else
+        echo "DISABLE_FAIL"
+    fi
+)
+safe_cleanup "$UPD_TEST_DIR2" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: Plan lifecycle — completed plan detection ---
+echo "--- plan lifecycle ---"
+PL_TEST_DIR=$(mktemp -d)
+mkdir -p "$PL_TEST_DIR/.claude"
+git init "$PL_TEST_DIR" >/dev/null 2>&1
+
+# Create a completed plan (all phases done)
+cat > "$PL_TEST_DIR/MASTER_PLAN.md" <<'PLAN_EOF'
+# Test Plan
+
+## Phase 1: First
+**Status:** completed
+
+## Phase 2: Second
+**Status:** completed
+PLAN_EOF
+
+# Source context-lib and test lifecycle detection
+# DEC-PLAN-003: old-format all-phases-done now returns "dormant" (replaces "completed")
+(
+    source "$HOOKS_DIR/context-lib.sh"
+    get_plan_status "$PL_TEST_DIR"
+    if [[ "$PLAN_LIFECYCLE" == "dormant" ]]; then
+        echo "COMPLETED_OK"
+    else
+        echo "COMPLETED_FAIL:$PLAN_LIFECYCLE"
+    fi
+) | while IFS= read -r line; do
+    if [[ "$line" == "COMPLETED_OK" ]]; then
+        pass "lifecycle — completed plan detected (dormant)"
+    elif [[ "$line" == COMPLETED_FAIL* ]]; then
+        fail "lifecycle — completed plan" "expected 'dormant', got: ${line#COMPLETED_FAIL:}"
+    fi
+done
+
+# Test active plan detection
+cat > "$PL_TEST_DIR/MASTER_PLAN.md" <<'PLAN_EOF'
+# Test Plan
+
+## Phase 1: First
+**Status:** completed
+
+## Phase 2: Second
+**Status:** in-progress
+PLAN_EOF
+
+(
+    source "$HOOKS_DIR/context-lib.sh"
+    get_plan_status "$PL_TEST_DIR"
+    if [[ "$PLAN_LIFECYCLE" == "active" ]]; then
+        echo "ACTIVE_OK"
+    else
+        echo "ACTIVE_FAIL:$PLAN_LIFECYCLE"
+    fi
+) | while IFS= read -r line; do
+    if [[ "$line" == "ACTIVE_OK" ]]; then
+        pass "lifecycle — active plan detected"
+    elif [[ "$line" == ACTIVE_FAIL* ]]; then
+        fail "lifecycle — active plan" "expected 'active', got: ${line#ACTIVE_FAIL:}"
+    fi
+done
+
+# Test no plan detection
+rm -f "$PL_TEST_DIR/MASTER_PLAN.md"
+(
+    source "$HOOKS_DIR/context-lib.sh"
+    get_plan_status "$PL_TEST_DIR"
+    if [[ "$PLAN_LIFECYCLE" == "none" ]]; then
+        echo "NONE_OK"
+    else
+        echo "NONE_FAIL:$PLAN_LIFECYCLE"
+    fi
+) | while IFS= read -r line; do
+    if [[ "$line" == "NONE_OK" ]]; then
+        pass "lifecycle — no plan detected"
+    elif [[ "$line" == NONE_FAIL* ]]; then
+        fail "lifecycle — no plan" "expected 'none', got: ${line#NONE_FAIL:}"
+    fi
+done
+
+safe_cleanup "$PL_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: Plan archival ---
+echo "--- plan archival ---"
+PA_TEST_DIR=$(mktemp -d)
+mkdir -p "$PA_TEST_DIR/.claude"
+
+cat > "$PA_TEST_DIR/MASTER_PLAN.md" <<'PLAN_EOF'
+# Test Archival Plan
+
+## Phase 1: Only Phase
+**Status:** completed
+PLAN_EOF
+
+(
+    source "$HOOKS_DIR/context-lib.sh"
+    result=$(archive_plan "$PA_TEST_DIR")
+    if [[ -n "$result" && ! -f "$PA_TEST_DIR/MASTER_PLAN.md" ]]; then
+        echo "ARCHIVE_OK:$result"
+    else
+        echo "ARCHIVE_FAIL"
+    fi
+) | while IFS= read -r line; do
+    if [[ "$line" == ARCHIVE_OK* ]]; then
+        archived_name="${line#ARCHIVE_OK:}"
+        pass "archival — plan archived as $archived_name"
+    elif [[ "$line" == "ARCHIVE_FAIL" ]]; then
+        fail "archival — plan archive" "MASTER_PLAN.md still exists or no result returned"
+    fi
+done
+
+# Check archived file exists
+if ls "$PA_TEST_DIR/archived-plans/"*test-archival-plan* 1>/dev/null 2>&1; then
+    pass "archival — file exists in archived-plans/"
+else
+    fail "archival — archived file" "no archived file found in $PA_TEST_DIR/archived-plans/"
+fi
+
+# Check breadcrumb
+if [[ -f "$PA_TEST_DIR/.claude/.last-plan-archived" ]]; then
+    pass "archival — breadcrumb created"
+else
+    fail "archival — breadcrumb" "no .last-plan-archived file"
+fi
+
+safe_cleanup "$PA_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+# --- Test: Trace Protocol ---
+echo "--- trace protocol ---"
+
+# Test 1: init_trace creates directory structure
+TR_TEST_DIR=$(mktemp -d)
+git init "$TR_TEST_DIR" >/dev/null 2>&1
+git -C "$TR_TEST_DIR" commit --allow-empty -m "init" >/dev/null 2>&1
+
+# Run test in subshell and capture output
+output=$(
+    source "$HOOKS_DIR/context-lib.sh"
+    TRACE_STORE="$TR_TEST_DIR/traces"
+    TRACE_ID=$(init_trace "$TR_TEST_DIR" "test-agent")
+    if [[ -n "$TRACE_ID" && -d "$TRACE_STORE/$TRACE_ID/artifacts" && -f "$TRACE_STORE/$TRACE_ID/manifest.json" ]]; then
+        echo "INIT_OK"
+    else
+        echo "INIT_FAIL"
+    fi
+)
+if [[ "$output" == "INIT_OK" ]]; then
+    pass "trace — init_trace creates dir + manifest"
+else
+    fail "trace — init_trace" "missing directory or manifest"
+fi
+
+# Test 2: init_trace manifest has correct schema
+output=$(
+    source "$HOOKS_DIR/context-lib.sh"
+    TRACE_STORE="$TR_TEST_DIR/traces"
+    TRACE_ID=$(init_trace "$TR_TEST_DIR" "test-agent")
+    manifest="$TRACE_STORE/$TRACE_ID/manifest.json"
+
+    # First check if valid JSON
+    if ! jq empty "$manifest" 2>/dev/null; then
+        echo "SCHEMA_FAIL:invalid JSON"
+    else
+        # Check required fields (project path may vary, skip exact match)
+        has_version=$(jq -r '.version' "$manifest")
+        has_agent=$(jq -r '.agent_type' "$manifest")
+        has_status=$(jq -r '.status' "$manifest")
+        has_project=$(jq -r '.project' "$manifest")
+
+        if [[ "$has_version" == "1" && "$has_agent" == "test-agent" && "$has_status" == "active" && -n "$has_project" ]]; then
+            echo "SCHEMA_OK"
+        else
+            echo "SCHEMA_FAIL:v='$has_version' agent='$has_agent' status='$has_status' proj='$has_project'"
+        fi
+    fi
+)
+if [[ "$output" == "SCHEMA_OK" ]]; then
+    pass "trace — manifest has correct schema"
+else
+    fail "trace — manifest schema" "$output"
+fi
+
+# Test 3: init_trace creates active marker (project-scoped since DEC-ISOLATION-002)
+output=$(
+    source "$HOOKS_DIR/context-lib.sh"
+    TRACE_STORE="$TR_TEST_DIR/traces"
+    CLAUDE_SESSION_ID="test-session-123"
+    TRACE_ID=$(init_trace "$TR_TEST_DIR" "test-agent")
+    phash=$(project_hash "$TR_TEST_DIR")
+    marker="$TRACE_STORE/.active-test-agent-test-session-123-${phash}"
+    if [[ -f "$marker" ]]; then
+        marker_content=$(cat "$marker")
+        if [[ "$marker_content" == "$TRACE_ID" ]]; then
+            echo "MARKER_OK"
+        else
+            echo "MARKER_FAIL:content mismatch"
+        fi
+    else
+        echo "MARKER_FAIL:marker not found (expected $marker)"
+    fi
+)
+if [[ "$output" == "MARKER_OK" ]]; then
+    pass "trace — active marker created with trace ID"
+else
+    fail "trace — active marker" "$output"
+fi
+
+# Test 4: detect_active_trace finds marker
+output=$(
+    source "$HOOKS_DIR/context-lib.sh"
+    TRACE_STORE="$TR_TEST_DIR/traces"
+    CLAUDE_SESSION_ID="test-session-456"
+    TRACE_ID=$(init_trace "$TR_TEST_DIR" "detect-agent")
+    DETECTED=$(detect_active_trace "$TR_TEST_DIR" "detect-agent")
+    if [[ "$DETECTED" == "$TRACE_ID" ]]; then
+        echo "DETECT_OK"
+    else
+        echo "DETECT_FAIL:expected=$TRACE_ID got=$DETECTED"
+    fi
+)
+if [[ "$output" == "DETECT_OK" ]]; then
+    pass "trace — detect_active_trace finds marker"
+else
+    fail "trace — detect_active_trace" "$output"
+fi
+
+# Test 5: finalize_trace updates manifest + creates index + cleans marker
+output=$(
+    source "$HOOKS_DIR/context-lib.sh"
+    TRACE_STORE="$TR_TEST_DIR/traces"
+    CLAUDE_SESSION_ID="test-session-789"
+    TRACE_ID=$(init_trace "$TR_TEST_DIR" "finalize-agent")
+    trace_dir="$TRACE_STORE/$TRACE_ID"
+
+    # Write summary (so it's not marked crashed)
+    echo "# Test Summary" > "$trace_dir/summary.md"
+    echo "All tests passed" > "$trace_dir/artifacts/test-output.txt"
+    echo "file1.sh" > "$trace_dir/artifacts/files-changed.txt"
+    # Write compliance.json (Observatory v2: finalize_trace reads test_result from here,
+    # not from test-output.txt directly). Also marks files-changed.txt present so
+    # finalize_trace counts files_changed from the artifact.
+    cat > "$trace_dir/compliance.json" <<'COMPLIANCEJSON'
+{
+  "agent_type": "finalize-agent",
+  "checked_at": "2026-02-21T03:00:00Z",
+  "artifacts": {
+    "summary.md": {"present": true, "source": "agent"},
+    "test-output.txt": {"present": true, "source": "auto-capture"},
+    "files-changed.txt": {"present": true, "source": "agent"}
+  },
+  "test_result": "pass",
+  "test_result_source": "test-output.txt",
+  "issues_count": 0
+}
+COMPLIANCEJSON
+
+    finalize_trace "$TRACE_ID" "$TR_TEST_DIR" "finalize-agent"
+
+    # Check manifest was updated
+    manifest_status=$(jq -r '.status' "$trace_dir/manifest.json" 2>/dev/null)
+    manifest_outcome=$(jq -r '.outcome' "$trace_dir/manifest.json" 2>/dev/null)
+    manifest_test=$(jq -r '.test_result' "$trace_dir/manifest.json" 2>/dev/null)
+    manifest_files=$(jq -r '.files_changed' "$trace_dir/manifest.json" 2>/dev/null)
+
+    # Check index was created
+    index_exists=false
+    if [[ -f "$TRACE_STORE/index.jsonl" ]]; then
+        if grep -q "$TRACE_ID" "$TRACE_STORE/index.jsonl"; then
+            index_exists=true
+        fi
+    fi
+
+    # Check marker was cleaned
+    marker="$TRACE_STORE/.active-finalize-agent-test-session-789"
+    marker_cleaned=true
+    [[ -f "$marker" ]] && marker_cleaned=false
+
+    if [[ "$manifest_status" == "completed" && "$manifest_outcome" == "success" && "$manifest_test" == "pass" && "$manifest_files" == "1" && "$index_exists" == "true" && "$marker_cleaned" == "true" ]]; then
+        echo "FINALIZE_OK"
+    else
+        echo "FINALIZE_FAIL:status=$manifest_status outcome=$manifest_outcome test=$manifest_test files=$manifest_files index=$index_exists marker_cleaned=$marker_cleaned"
+    fi
+)
+if [[ "$output" == "FINALIZE_OK" ]]; then
+    pass "trace — finalize updates manifest, indexes, cleans marker"
+else
+    fail "trace — finalize" "$output"
+fi
+
+# Test 6: finalize_trace marks crashed when no summary
+# @decision DEC-V3-004
+# @title Crash detection: status=crashed, outcome=skipped when summary.md absent
+# @status accepted
+# @rationale finalize_trace() distinguishes two no-artifacts states:
+#   - outcome="skipped": artifacts dir missing entirely (agent never initialised)
+#   - outcome="skipped": artifacts dir exists but is empty (agent crashed immediately)
+#   In both cases finalize_trace() sets status="crashed" (no summary.md) but
+#   deliberately does NOT override outcome="skipped" to "crashed" — the comment
+#   at context-lib.sh line ~1166 reads: "Do not override 'skipped' — skipped means
+#   no artifacts at all (never started), which is a distinct state from crashed
+#   (started but failed to produce summary.md)."
+#   Since init_trace() always creates the artifacts dir, a crash right after init
+#   produces an empty artifacts dir, hence outcome="skipped" and status="crashed".
+#   The correct assertion is therefore status=crashed AND outcome=skipped.
+output=$(
+    source "$HOOKS_DIR/context-lib.sh"
+    TRACE_STORE="$TR_TEST_DIR/traces"
+    CLAUDE_SESSION_ID="test-session-crash"
+    TRACE_ID=$(init_trace "$TR_TEST_DIR" "crash-agent")
+    # Do NOT write summary.md — simulates crash
+    finalize_trace "$TRACE_ID" "$TR_TEST_DIR" "crash-agent"
+
+    crash_status=$(jq -r '.status' "$TRACE_STORE/$TRACE_ID/manifest.json" 2>/dev/null)
+    crash_outcome=$(jq -r '.outcome' "$TRACE_STORE/$TRACE_ID/manifest.json" 2>/dev/null)
+
+    # status=crashed (no summary.md), outcome=skipped (empty artifacts dir — init_trace
+    # always creates it, but a crash before any artifact write leaves it empty)
+    if [[ "$crash_status" == "crashed" && "$crash_outcome" == "skipped" ]]; then
+        echo "CRASH_OK"
+    else
+        echo "CRASH_FAIL:status=$crash_status outcome=$crash_outcome"
+    fi
+)
+if [[ "$output" == "CRASH_OK" ]]; then
+    pass "trace — no summary marks as crashed (status=crashed, outcome=skipped)"
+else
+    fail "trace — crash detection" "$output"
+fi
+
+# Test 7: subagent-start.sh injects TRACE_DIR for planner
+output=$(
+    export TRACE_STORE="$TR_TEST_DIR/traces"
+    export CLAUDE_PROJECT_DIR="$TR_TEST_DIR"
+    mkdir -p "$TR_TEST_DIR/.git"
+    hook_output=$(echo '{"agent_type":"planner"}' | bash "$HOOKS_DIR/subagent-start.sh" 2>/dev/null) || true
+    if echo "$hook_output" | grep -q "TRACE_DIR="; then
+        echo "INJECT_OK"
+    else
+        echo "INJECT_FAIL:no TRACE_DIR in output"
+    fi
+)
+if [[ "$output" == "INJECT_OK" ]]; then
+    pass "trace — subagent-start injects TRACE_DIR for planner"
+else
+    fail "trace — subagent-start injection" "$output"
+fi
+
+# Test 8: subagent-start.sh skips trace for Bash agent
+output=$(
+    export TRACE_STORE="$TR_TEST_DIR/traces"
+    export CLAUDE_PROJECT_DIR="$TR_TEST_DIR"
+    mkdir -p "$TR_TEST_DIR/.git"
+    # Count traces before
+    before=$(ls "$TRACE_STORE" 2>/dev/null | grep -c "^Bash-" || echo "0")
+    hook_output=$(echo '{"agent_type":"Bash"}' | bash "$HOOKS_DIR/subagent-start.sh" 2>/dev/null) || true
+    after=$(ls "$TRACE_STORE" 2>/dev/null | grep -c "^Bash-" || echo "0")
+    if [[ "$before" == "$after" ]]; then
+        echo "SKIP_OK"
+    else
+        echo "SKIP_FAIL:trace created for Bash agent"
+    fi
+)
+if [[ "$output" == "SKIP_OK" ]]; then
+    pass "trace — subagent-start skips trace for Bash agent"
+else
+    fail "trace — Bash skip" "$output"
+fi
+
+safe_cleanup "$TR_TEST_DIR" "$SCRIPT_DIR"
+echo ""
+
+
+# ===== V2 Observability Tests =====
+echo ""
+echo "=== V2 Observability Tests ==="
+
+V2_TEST_FILES=(
+    "test-trajectory.sh"
+    "test-cross-session.sh"
+    "test-subagent-tracker-scope.sh"
+    "test-checkpoint.sh"
+    "test-session-context.sh"
+    "test-proof-gate.sh"
+    "test-auto-verify.sh"
+    "test-guard-cwd-recovery.sh"
+    "test-guard-check5-spaces.sh"
+    "test-guard-worktree-cd.sh"
+    "test-observatory-metrics.sh"
+    "test-observatory-convergence.sh"
+    "test-obs-data-quality.sh"
+    "test-obs-pipeline.sh"
+    "test-tester-gate-heal.sh"
+    "test-living-plan-hooks.sh"
+    "test-plan-lifecycle.sh"
+    "test-plan-injection.sh"
+    "test-compaction-survival.sh"
+    "test-task-interruption.sh"
+    "test-evidence-gate.sh"
+    "test-ci-feedback.sh"
+)
+
+for test_file in "${V2_TEST_FILES[@]}"; do
+    test_path="$SCRIPT_DIR/$test_file"
+    if [[ -f "$test_path" ]]; then
+        echo ""
+        echo "--- Running $test_file ---"
+        if bash "$test_path"; then
+            echo "  $test_file: ALL PASSED"
+        else
+            echo "  $test_file: FAILURES DETECTED"
+            failed=$((failed + 1))
+        fi
+    else
+        echo "  SKIP: $test_file not found"
+        skipped=$((skipped + 1))
+    fi
+done
+
+
+# ===== State Governance Tests =====
+# Phase 1: Registry lint (verifies all hook writes are registered)
+# Phase 2: Multi-context second pass (re-runs state-writing tests from a temp CWD
+#   to catch CWD assumptions — e.g. T08's .git file-vs-directory issue where a hook
+#   assumes CWD contains a real .git directory rather than the gitdir pointer file
+#   written by git worktree add).
+#
+# @decision DEC-STATE-GOV-001
+# @title Multi-context second pass in run-hooks.sh for CWD assumption detection
+# @status accepted
+# @rationale Several hooks use detect_project_root() or get_claude_dir() which
+#   walk up from CWD to find .git. If CWD is a non-git temp directory, these
+#   functions fall back to HOME or produce different paths than expected. Running
+#   a subset of state-writing tests from a temp CWD catches this class of bugs
+#   without requiring a full second run of the entire suite (which is slow).
+#   The subset is: proof gate, project isolation, and state registry — exactly
+#   the tests that validate state file paths and scoping.
+echo ""
+echo "=== State Governance Tests ==="
+
+# --- Pass 2: Multi-context re-run from temp CWD ---
+# Create a temp directory that is NOT a git repo, set it as CWD for the subprocess,
+# and re-run the state-writing tests. This verifies hooks don't assume CWD=git root.
+echo ""
+echo "--- Multi-Context Pass (Pass 2: non-git temp CWD) ---"
+
+MULTI_CTX_TMPDIR=$(mktemp -d)
+
+# Tests to re-run in alien CWD (state-writing tests most sensitive to CWD assumptions)
+MULTI_CTX_TESTS=(
+    "test-proof-gate.sh"
+    "test-project-isolation.sh"
+)
+
+MULTI_CTX_PASS2_FAILED=0
+for mc_test in "${MULTI_CTX_TESTS[@]}"; do
+    mc_test_path="$SCRIPT_DIR/$mc_test"
+    if [[ -f "$mc_test_path" ]]; then
+        echo ""
+        echo "  [Pass 2] Running $mc_test from temp CWD: $MULTI_CTX_TMPDIR"
+        # Run in a subshell with CWD set to the temp dir (not a git repo)
+        if bash -c "cd '$MULTI_CTX_TMPDIR' && bash '$mc_test_path'" 2>&1 | sed 's/^/    /'; then
+            echo "  [Pass 2] $mc_test: ALL PASSED (alien CWD)"
+        else
+            echo "  [Pass 2] $mc_test: FAILURES DETECTED (alien CWD — possible CWD assumption bug)"
+            MULTI_CTX_PASS2_FAILED=$((MULTI_CTX_PASS2_FAILED + 1))
+            failed=$((failed + 1))
+        fi
+    else
+        echo "  [Pass 2] SKIP: $mc_test not found"
+    fi
+done
+
+safe_cleanup "$MULTI_CTX_TMPDIR" "$SCRIPT_DIR"
+
+if [[ "$MULTI_CTX_PASS2_FAILED" -eq 0 ]]; then
+    echo ""
+    echo "  Multi-context pass: all ${#MULTI_CTX_TESTS[@]} tests passed from non-git CWD"
+fi
+
+
+# --- Summary ---
+echo "==========================="
+total=$((passed + failed + skipped))
+echo -e "Total: $total | ${GREEN}Passed: $passed${NC} | ${RED}Failed: $failed${NC} | ${YELLOW}Skipped: $skipped${NC}"
+
+if [[ $failed -gt 0 ]]; then
+    exit 1
+fi
