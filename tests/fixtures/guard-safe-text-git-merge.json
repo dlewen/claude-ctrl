@@ -1,6 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input": {
-    "command": "echo \"we should consider git merging strategies for the next release\""
-  }
-}

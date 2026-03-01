@@ -1,4 +1,0 @@
-__pycache__/
-*.pyc
-*.html
-!templates/wizard.html

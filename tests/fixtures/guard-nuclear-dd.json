@@ -1,6 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input": {
-    "command": "dd if=/dev/zero of=/dev/sda bs=1M"
-  }
-}

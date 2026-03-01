@@ -1,6 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input": {
-    "command": "git -C /tmp/repo merge feature-branch"
-  }
-}
