@@ -112,6 +112,13 @@ if [[ -e "$(dirname "$FILE_PATH")" ]]; then
             #   don't permanently exempt proof invalidation. TTL is 300s (5 min).
             #   Matches the marker format written by task-track.sh (line 88).
             _guardian_active=false
+            # @decision DEC-TRACK-GUARDIAN-TTL-001
+            # @title Apply 5-minute TTL to guardian marker check in track.sh
+            # @status accepted
+            # @rationale Guardian writes .active-guardian-* markers with format
+            #   "pre-dispatch|<timestamp>" so expired markers (stale session crashes)
+            #   don't permanently exempt proof invalidation. TTL is 300s (5 min).
+            #   Matches the marker format written by task-track.sh (line 88).
             for _gm in "${TRACE_STORE}/.active-guardian-"*; do
                 if [[ -f "$_gm" ]]; then
                     _marker_ts=$(cut -d'|' -f2 "$_gm" 2>/dev/null || echo "0")
