@@ -94,6 +94,24 @@ if [[ "$(basename "$FILE_PATH")" != "MASTER_PLAN.md" ]]; then
                 if [[ -z "$GIT_DIR" || ! -f "$GIT_DIR/MERGE_HEAD" ]]; then
                     emit_deny "BLOCKED: Cannot write source code on $CURRENT_BRANCH branch. Sacred Practice #2: Main is sacred.\n\nAction: Invoke the Guardian agent to create an isolated worktree for this work."
                 fi
+            elif [[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "HEAD" ]]; then
+                # @decision DEC-BRANCH-GUARD-FEATURE-001
+                # @title Extend branch-guard to feature branches outside .worktrees/
+                # @status accepted
+                # @rationale The legacy branch-guard only blocked writes on main/master.
+                #   The orchestrator demonstrated it could write source on feature branches
+                #   in the main working tree without creating a worktree — bypassing Sacred
+                #   Practice #2. This elif denies any source write on a feature branch when
+                #   the file path does NOT contain /.worktrees/. The .worktrees/ check ensures
+                #   implementers working in proper isolated worktrees are unaffected.
+                #   "HEAD" is excluded: unborn branches (no commits yet) report "HEAD" and
+                #   should not be blocked during initial project setup.
+                if [[ "$FILE_PATH" != *"/.worktrees/"* ]]; then
+                    GIT_DIR=$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "")
+                    if [[ -z "$GIT_DIR" || ! -f "$GIT_DIR/MERGE_HEAD" ]]; then
+                        emit_deny "BLOCKED: Cannot write source on '$CURRENT_BRANCH' outside a worktree. Sacred Practice #2: All implementation work must happen in isolated worktrees.\n\nAction: git worktree add .worktrees/<name> -b feature/<name>, then dispatch Implementer to the worktree."
+                    fi
+                fi
             fi
         fi
     fi

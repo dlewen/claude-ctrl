@@ -193,29 +193,26 @@ fi
 # The breadcrumb lets resolve_proof_file() (in log.sh) find the correct path
 # so prompt-submit.sh, check-tester.sh, and guard.sh all operate on the same file.
 #
-# Gate C.1: Block implementer on main/master (Sacred Practice #2).
+# Gate C.1: Block implementer on any branch without a linked worktree (Sacred Practice #2).
 # @decision DEC-TASK-GATE-001
-# @title Block implementer dispatch on main/master unless worktree exists
+# @title Extend Gate C.1 to all branches, not just main/master
 # @status accepted
-# @rationale Sacred Practice #2 states feature work must happen in worktrees, never on
-#   main. Enforcing this at dispatch time prevents agents from accidentally writing
-#   source files to main. The gate checks for linked worktrees — if any non-main
-#   worktree exists, the orchestrator followed the practice (created worktree first).
-#   branch-guard.sh provides primary protection (blocks source edits on main).
-#   This gate is defense-in-depth: deny only when NO worktrees exist at all.
+# @rationale The original gate only blocked implementer dispatch on main/master,
+#   allowing direct code writes on feature branches without worktree isolation.
+#   Sacred Practice #2 requires ALL implementation work in worktrees. Extended
+#   to check worktree count on any branch. If CWD is already inside a worktree,
+#   the check passes (the orchestrator followed the practice).
 declare_gate "implementer-worktree-gate" "Implementer dispatch activates proof gate" "deny"
 if [[ "$AGENT_TYPE" == "implementer" ]]; then
-    # Gate C.1: Block implementer on main/master (Sacred Practice #2).
+    # Gate C.1: Block implementer on any branch without a linked worktree (Sacred Practice #2).
+    # Extended from main/master-only to all branches — Sacred Practice #2 applies everywhere.
     CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-    if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "master" ]]; then
-        # Allow if linked worktrees exist — evidence of Sacred Practice #2 compliance.
-        # The orchestrator creates the worktree first, then dispatches the implementer.
-        # branch-guard.sh provides primary protection against source edits on main.
-        WORKTREE_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
-            | grep -c '^worktree ' || echo "0")
-        if [[ "$WORKTREE_COUNT" -le 1 ]]; then
-            emit_deny "Cannot dispatch implementer on '$CURRENT_BRANCH' branch. Sacred Practice #2: create a worktree first. Use: git worktree add .worktrees/<name> -b feature/<name>"
-        fi
+    WORKTREE_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
+        | grep -c '^worktree ' || echo "0")
+    IS_IN_WORKTREE=false
+    if [[ "$PWD" == *"/.worktrees/"* ]]; then IS_IN_WORKTREE=true; fi
+    if [[ "$WORKTREE_COUNT" -le 1 && "$IS_IN_WORKTREE" == "false" ]]; then
+        emit_deny "Cannot dispatch implementer on '$CURRENT_BRANCH' without a linked worktree. Sacred Practice #2: create a worktree first. Use: git worktree add .worktrees/<name> -b feature/<name>"
     fi
 
     # Gate C.2: Activate proof gate — creates .proof-status-{phash} = needs-verification.

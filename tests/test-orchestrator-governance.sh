@@ -115,7 +115,7 @@ make_git_repo_on_main() {
 # Adds to CLEANUP_MARKERS so EXIT trap removes it
 make_guardian_marker() {
     local marker="${TRACE_STORE}/.active-guardian-test-$$-$RANDOM"
-    touch "$marker"
+    echo "pre-dispatch|$(date +%s)" > "$marker"
     CLEANUP_MARKERS+=("$marker")
     echo "$marker"
 }
@@ -445,6 +445,96 @@ CLEANUP_DIRS+=("${REPO17}/.worktrees/feature-test")
         pass "Gate C.1 allows implementer on main with linked worktree"
     else
         fail "Gate C.1 should allow implementer on main with linked worktree"
+    fi
+}
+
+# ============================================================
+# Test 18: Gate C.1 denies implementer on feature branch without worktrees
+# ============================================================
+echo ""
+echo "=== Test 18: Gate C.1 denies implementer on feature branch without worktrees ==="
+
+REPO18=$(mktemp -d)
+CLEANUP_DIRS+=("$REPO18")
+git -C "$REPO18" init -q 2>/dev/null
+git -C "$REPO18" config user.email "test@test.com" 2>/dev/null
+git -C "$REPO18" config user.name "Test" 2>/dev/null
+echo "initial" > "$REPO18/base.txt"
+git -C "$REPO18" add base.txt 2>/dev/null
+git -C "$REPO18" commit -q -m "initial" 2>/dev/null
+# Checkout a feature branch — no worktrees linked
+git -C "$REPO18" checkout -q -b feature/no-worktree 2>/dev/null
+
+# Simulate the extended Gate C.1 logic (all-branch version)
+(
+    PROJECT_ROOT="$REPO18"
+    deny_called=0
+    deny_msg=""
+
+    # cd to the repo so PWD is not inside .worktrees/ (test runner CWD may be a worktree)
+    cd "$PROJECT_ROOT"
+    CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    WORKTREE_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
+        | grep -c '^worktree ' || echo "0")
+    IS_IN_WORKTREE=false
+    if [[ "$PWD" == *"/.worktrees/"* ]]; then IS_IN_WORKTREE=true; fi
+    if [[ "$WORKTREE_COUNT" -le 1 && "$IS_IN_WORKTREE" == "false" ]]; then
+        deny_called=1
+        deny_msg="Cannot dispatch implementer on '$CURRENT_BRANCH' without a linked worktree."
+    fi
+
+    echo "${deny_called}|${deny_msg}"
+) | {
+    read result18
+    deny_called18=$(echo "$result18" | cut -d'|' -f1)
+    if [[ "$deny_called18" == "1" ]]; then
+        pass "Gate C.1 denies implementer on feature branch without worktrees"
+    else
+        fail "Gate C.1 should deny implementer on feature branch without worktrees"
+    fi
+}
+
+# ============================================================
+# Test 19: Gate C.1 allows implementer on feature branch with linked worktree
+# ============================================================
+echo ""
+echo "=== Test 19: Gate C.1 allows implementer on feature branch with linked worktree ==="
+
+REPO19=$(mktemp -d)
+CLEANUP_DIRS+=("$REPO19")
+git -C "$REPO19" init -q 2>/dev/null
+git -C "$REPO19" config user.email "test@test.com" 2>/dev/null
+git -C "$REPO19" config user.name "Test" 2>/dev/null
+echo "initial" > "$REPO19/base.txt"
+git -C "$REPO19" add base.txt 2>/dev/null
+git -C "$REPO19" commit -q -m "initial" 2>/dev/null
+git -C "$REPO19" branch -m main 2>/dev/null || true
+# Checkout a feature branch
+git -C "$REPO19" checkout -q -b feature/has-worktree 2>/dev/null
+# Add a linked worktree — evidence of Sacred Practice #2 compliance
+git -C "$REPO19" worktree add "${REPO19}/.worktrees/feature-impl" -b feature-impl-wt 2>/dev/null
+CLEANUP_DIRS+=("${REPO19}/.worktrees/feature-impl")
+
+(
+    PROJECT_ROOT="$REPO19"
+    deny_called=0
+
+    CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    WORKTREE_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
+        | grep -c '^worktree ' || echo "0")
+    IS_IN_WORKTREE=false
+    if [[ "$PWD" == *"/.worktrees/"* ]]; then IS_IN_WORKTREE=true; fi
+    if [[ "$WORKTREE_COUNT" -le 1 && "$IS_IN_WORKTREE" == "false" ]]; then
+        deny_called=1
+    fi
+
+    echo "${deny_called}"
+) | {
+    read deny_called19
+    if [[ "$deny_called19" == "0" ]]; then
+        pass "Gate C.1 allows implementer on feature branch with linked worktree"
+    else
+        fail "Gate C.1 should allow implementer on feature branch with linked worktree"
     fi
 }
 
