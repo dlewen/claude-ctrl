@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # statusline.sh — Claude Code two-line status HUD.
 #
-# Purpose: Reads JSON from stdin (model, workspace, cost, context window),
+# Purpose: Reads JSON from stdin (model, workspace, cost, context window, tokens),
 # reads .statusline-cache for git/agent state, reads .todo-count for todos,
 # and outputs two ANSI-formatted status lines separated by a newline.
 #
@@ -14,14 +14,33 @@
 # "where am I / what's happening", line 2 is "how much have I spent / is the
 # context getting full". Removed: time (HH:MM:SS), plan phase, test status,
 # community segment, version, worktree-roster stale detection (PID-based).
-# Added: context window bar, cost, duration (ms to human), lines changed, cache %.
+# Added: context window bar, cost (~$X.XX), duration (ms to human), lines
+# changed, cache %, token count (tokens: Nk).
+#
+# @decision DEC-STATUSLINE-001
+# @title Domain clustering for line 1 segments
+# @status accepted
+# @rationale Grouping related segments with explicit labels reduces cognitive
+# load when scanning the statusline. Line 1 clusters: model+workspace ("where
+# am I"), git state with dirty:/wt: labels ("repo state"), agents: with type
+# list ("what work is active"), todos: count ("pending work"). Labels make
+# numeric values unambiguous — "8 dirty" is less clear than "dirty: 8".
+#
+# @decision DEC-STATUSLINE-002
+# @title Token count segment with K/M notation and usage-based color
+# @status accepted
+# @rationale Token consumption is a leading indicator of context pressure.
+# Showing total tokens in K/M notation alongside the context bar gives the
+# user an absolute number to complement the percentage bar. Color thresholds
+# (dim <50k, default 50k-500k, yellow >500k) provide progressive warning
+# without false alarm at low usage levels.
 #
 # Input (stdin): JSON with .model.display_name, .workspace.current_dir,
 #   .cost.*, .context_window.*
 # Output (stdout): Two ANSI-formatted lines (newline-separated)
 #
-# Line 1: model | workspace | dirty/WT (if any) | agents (if active) | todos (if any)
-# Line 2: context bar | cost | duration | +lines/-lines (if any) | cache % (if any)
+# Line 1: model+workspace | dirty: N  wt: N | agents: N (types) | todos: N
+# Line 2: context bar | tokens: Nk | ~$cost | duration | +lines/-lines | cache %
 #
 set -euo pipefail
 
@@ -43,11 +62,12 @@ read_vars=$(printf '%s' "$input" | jq -r '[
   (.context_window.used_percentage // -1 | tostring),
   (.context_window.current_usage.cache_read_input_tokens // 0 | tostring),
   (.context_window.current_usage.input_tokens // 0 | tostring),
-  (.context_window.current_usage.cache_creation_input_tokens // 0 | tostring)
-] | join("\t")' 2>/dev/null || printf 'Claude\t\t\t0\t0\t0\t0\t-1\t0\t0\t0')
+  (.context_window.current_usage.cache_creation_input_tokens // 0 | tostring),
+  ((.context_window.total_input_tokens // 0) + (.context_window.total_output_tokens // 0) | tostring)
+] | join("\t")' 2>/dev/null || printf 'Claude\t\t\t0\t0\t0\t0\t-1\t0\t0\t0\t0')
 
 IFS=$'\t' read -r model workspace workspace_dir cost_usd duration_ms \
-  lines_add lines_rm ctx_pct cache_read input_tokens cache_create <<< "$read_vars"
+  lines_add lines_rm ctx_pct cache_read input_tokens cache_create total_tokens <<< "$read_vars"
 
 # ---------------------------------------------------------------------------
 # Read .statusline-cache (git state + agents)
@@ -129,6 +149,29 @@ format_duration() {
   fi
 }
 
+# format_tokens count — convert raw token count to K/M notation
+# < 1000: raw (e.g. 500)
+# 1000-999999: Nk (e.g. 145k)
+# >= 1000000: N.NM (e.g. 1.5M)
+format_tokens() {
+  local count=$1
+  # Ensure integer (strip decimals if any)
+  count="${count%.*}"
+  count=$(( count ))
+
+  if   (( count >= 1000000 )); then
+    # M notation with one decimal: count / 100000 gives tenths
+    local tenths=$(( count / 100000 ))
+    local whole=$(( tenths / 10 ))
+    local frac=$(( tenths % 10 ))
+    printf '%d.%dM' "$whole" "$frac"
+  elif (( count >= 1000 )); then
+    printf '%dk' "$(( count / 1000 ))"
+  else
+    printf '%d' "$count"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Cache efficiency: cache_read / (input + cache_read + cache_create) * 100
 # ---------------------------------------------------------------------------
@@ -139,38 +182,42 @@ if (( total_input > 0 && cache_read > 0 )); then
 fi
 
 # ---------------------------------------------------------------------------
-# LINE 1: Project context
+# LINE 1: Project context — domain-clustered with labels
 # ---------------------------------------------------------------------------
+
+# Cluster A: Model + workspace
 line1=$(printf '\033[2m%s\033[0m \033[1;36m%s\033[0m' "$model" "$workspace")
 
-# Dirty + WT (combined segment)
+# Cluster B: Git state — dirty: N  wt: N (combined segment, only if either > 0)
 if (( cache_dirty > 0 || cache_wt > 0 )); then
-  dirty_part="" wt_part=""
-  (( cache_dirty > 0 )) && dirty_part=$(printf '\033[31m%d dirty\033[0m' "$cache_dirty")
-  (( cache_wt    > 0 )) && wt_part=$(printf '\033[36mWT:%d\033[0m' "$cache_wt")
-
-  if [[ -n "$dirty_part" && -n "$wt_part" ]]; then
-    line1=$(printf '%s %b %s  %s' "$line1" "$sep" "$dirty_part" "$wt_part")
-  elif [[ -n "$dirty_part" ]]; then
-    line1=$(printf '%s %b %s' "$line1" "$sep" "$dirty_part")
-  else
-    line1=$(printf '%s %b %s' "$line1" "$sep" "$wt_part")
+  git_parts=""
+  if (( cache_dirty > 0 )); then
+    git_parts=$(printf '\033[31mdirty: %d\033[0m' "$cache_dirty")
   fi
+  if (( cache_wt > 0 )); then
+    wt_str=$(printf '\033[36mwt: %d\033[0m' "$cache_wt")
+    if [[ -n "$git_parts" ]]; then
+      git_parts=$(printf '%s  %s' "$git_parts" "$wt_str")
+    else
+      git_parts="$wt_str"
+    fi
+  fi
+  line1=$(printf '%s %b %s' "$line1" "$sep" "$git_parts")
 fi
 
-# Agents (yellow, only if active > 0)
+# Cluster C: Agents — agents: N (type1,type2), only if active > 0
 if (( cache_agents > 0 )); then
   if [[ -n "$cache_agents_types" ]]; then
-    line1=$(printf '%s %b \033[33m⚡%d agents (%s)\033[0m' \
+    line1=$(printf '%s %b \033[33magents: %d (%s)\033[0m' \
       "$line1" "$sep" "$cache_agents" "$cache_agents_types")
   else
-    line1=$(printf '%s %b \033[33m⚡%d agents\033[0m' "$line1" "$sep" "$cache_agents")
+    line1=$(printf '%s %b \033[33magents: %d\033[0m' "$line1" "$sep" "$cache_agents")
   fi
 fi
 
-# Todos (magenta, only if count > 0)
+# Cluster D: Todos — todos: N, only if count > 0
 if (( todo_count > 0 )); then
-  line1=$(printf '%s %b \033[35m%d todos\033[0m' "$line1" "$sep" "$todo_count")
+  line1=$(printf '%s %b \033[35mtodos: %d\033[0m' "$line1" "$sep" "$todo_count")
 fi
 
 # ---------------------------------------------------------------------------
@@ -180,13 +227,24 @@ fi
 # Context bar (always shown)
 line2=$(build_context_bar "$ctx_pct")
 
-# Cost (always shown, green <$1, yellow $1-5, red >$5)
+# Token count segment (always shown after context bar)
+total_tokens_int="${total_tokens%.*}"
+total_tokens_int=$(( total_tokens_int ))
+tokens_str=$(format_tokens "$total_tokens_int")
+if   (( total_tokens_int > 500000 )); then tokens_color="33"  # yellow
+elif (( total_tokens_int > 50000  )); then tokens_color="0"   # default
+else                                        tokens_color="2"   # dim
+fi
+tokens_display=$(printf '\033[%smtokens: %s\033[0m' "$tokens_color" "$tokens_str")
+line2=$(printf '%s %b %s' "$line2" "$sep" "$tokens_display")
+
+# Cost (always shown, ~$X.XX, green <$1, yellow $1-5, red >$5)
 cost_int=${cost_usd%.*}  # integer part for threshold comparison
 if   (( cost_int >= 5 )); then cost_color="31"
 elif (( cost_int >= 1 )); then cost_color="33"
 else                           cost_color="32"
 fi
-cost_display=$(printf '\033[%sm$%.2f\033[0m' "$cost_color" "$cost_usd")
+cost_display=$(printf '\033[%sm~$%.2f\033[0m' "$cost_color" "$cost_usd")
 line2=$(printf '%s %b %s' "$line2" "$sep" "$cost_display")
 
 # Duration (always shown, dim)
