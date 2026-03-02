@@ -104,20 +104,17 @@ if [[ -f "$SESSION_EVENT_FILE" && -s "$SESSION_EVENT_FILE" ]]; then
     fi
 
     # Determine session outcome from proof-status or test-status.
-    # Check scoped proof-status first, fall back to legacy for backward compat.
+    # Use resolve_proof_file() for worktree-aware resolution (replaces inline project_hash).
     OUTCOME="unknown"
-    _SES_PHASH=$(project_hash "$PROJECT_ROOT")
-    _SCOPED_PROOF="${CLAUDE_DIR}/.proof-status-${_SES_PHASH}"
-    if [[ -f "$_SCOPED_PROOF" ]]; then
-        PROOF_FILE="$_SCOPED_PROOF"
-    elif [[ -f "${CLAUDE_DIR}/.proof-status" ]]; then
-        PROOF_FILE="${CLAUDE_DIR}/.proof-status"
-    else
-        PROOF_FILE=""
-    fi
+    PROOF_FILE=$(resolve_proof_file)
+    [[ ! -f "$PROOF_FILE" ]] && PROOF_FILE=""
     TEST_STATUS_FILE="${CLAUDE_DIR}/.test-status"
     if [[ -n "$PROOF_FILE" && -f "$PROOF_FILE" ]]; then
-        PS_VAL=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null || echo "")
+        if validate_state_file "$PROOF_FILE" 2; then
+            PS_VAL=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null || echo "")
+        else
+            PS_VAL=""  # corrupt — skip proof status derivation
+        fi
         [[ "$PS_VAL" == "verified" ]] && OUTCOME="committed"
     fi
     if [[ "$OUTCOME" == "unknown" && -f "$TEST_STATUS_FILE" ]]; then

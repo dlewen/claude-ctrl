@@ -148,18 +148,15 @@ case "$AGENT_TYPE" in
         fi
         CONTEXT_PARTS+=("After tests pass, return to orchestrator. The tester agent handles live verification — you do NOT demo or write .proof-status.")
         # Inject current proof status with contextual guidance (W7-2: #42 residual, #134)
-        # Check project-scoped proof-status file first, fall back to legacy for backward compat.
-        _PROOF_PHASH=$(project_hash "$PROJECT_ROOT")
-        _PROOF_SCOPED="${CLAUDE_DIR}/.proof-status-${_PROOF_PHASH}"
-        if [[ -f "$_PROOF_SCOPED" ]]; then
-            _PROOF_FILE="$_PROOF_SCOPED"
-        elif [[ -f "${CLAUDE_DIR}/.proof-status" ]]; then
-            _PROOF_FILE="${CLAUDE_DIR}/.proof-status"
-        else
-            _PROOF_FILE=""
-        fi
+        # Use resolve_proof_file() for worktree-aware resolution (replaces inline project_hash).
+        _PROOF_FILE=$(resolve_proof_file)
+        [[ ! -f "$_PROOF_FILE" ]] && _PROOF_FILE=""
         if [[ -n "$_PROOF_FILE" && -f "$_PROOF_FILE" ]]; then
-            _PROOF_VAL=$(cut -d'|' -f1 "$_PROOF_FILE" 2>/dev/null || echo "")
+            if validate_state_file "$_PROOF_FILE" 2; then
+                _PROOF_VAL=$(cut -d'|' -f1 "$_PROOF_FILE" 2>/dev/null || echo "")
+            else
+                _PROOF_VAL=""
+            fi
             case "$_PROOF_VAL" in
                 verified)
                     CONTEXT_PARTS+=("Proof: verified — user confirmed feature works.") ;;

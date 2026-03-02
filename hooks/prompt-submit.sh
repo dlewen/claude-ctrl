@@ -40,9 +40,14 @@ if [[ -z "$PROMPT" ]]; then
     _EMPTY_HINT="User pressed Enter without text. This is normal interaction — treat as approval or continuation of the current flow. Do NOT comment on the empty message."
     _EMPTY_CLAUDE_DIR=$(get_claude_dir 2>/dev/null || echo "")
     if [[ -n "$_EMPTY_CLAUDE_DIR" ]]; then
-        _EMPTY_PROOF="${_EMPTY_CLAUDE_DIR}/.proof-status"
-        if [[ -f "$_EMPTY_PROOF" ]]; then
-            _EMPTY_STATUS=$(cut -d'|' -f1 "$_EMPTY_PROOF" 2>/dev/null || echo "")
+        _EMPTY_PROOF=$(resolve_proof_file)
+        [[ ! -f "$_EMPTY_PROOF" ]] && _EMPTY_PROOF=""
+        if [[ -n "$_EMPTY_PROOF" && -f "$_EMPTY_PROOF" ]]; then
+            if validate_state_file "$_EMPTY_PROOF" 2; then
+                _EMPTY_STATUS=$(cut -d'|' -f1 "$_EMPTY_PROOF" 2>/dev/null || echo "")
+            else
+                _EMPTY_STATUS=""  # corrupt — skip hint
+            fi
             if [[ "$_EMPTY_STATUS" == "pending" ]]; then
                 _EMPTY_HINT="User pressed Enter without text. Approval gate is active (.proof-status=pending) — approval keywords must appear as text. Remind the user to type 'approved' or use /approve. Do NOT comment on the message being empty."
             fi
@@ -189,7 +194,11 @@ fi
 PROOF_FILE=$(resolve_proof_file)
 if echo "$PROMPT" | grep -qiE '\bverified\b|\bapproved?\b|\blgtm\b|\blooks\s+good\b|\bship\s+it\b|\bapprove\s+for\s+commit\b'; then
     if [[ -f "$PROOF_FILE" ]]; then
-        CURRENT_STATUS=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null)
+        if validate_state_file "$PROOF_FILE" 2; then
+            CURRENT_STATUS=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null)
+        else
+            CURRENT_STATUS=""  # corrupt — skip approval transition
+        fi
         if [[ "$CURRENT_STATUS" == "pending" || "$CURRENT_STATUS" == "needs-verification" ]]; then
             write_proof_status "verified" "$PROJECT_ROOT"
             CONTEXT_PARTS+=("Proof-of-work verified by user. Guardian dispatch is now unblocked.")
