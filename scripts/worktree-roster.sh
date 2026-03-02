@@ -57,11 +57,69 @@ REGISTRY="${REGISTRY:-$HOME/.claude/.worktree-roster.tsv}"
 # Allow override for testing sweep's filesystem scan target
 WORKTREE_DIR="${WORKTREE_DIR:-$HOME/.claude/.worktrees}"
 
+# Allow override for testing state cleanup target
+CLAUDE_STATE_DIR="${CLAUDE_STATE_DIR:-$HOME/.claude}"
+
 # Ensure registry exists
 init_registry() {
     if [[ ! -f "$REGISTRY" ]]; then
         touch "$REGISTRY"
     fi
+}
+
+# clean_worktree_state — remove breadcrumb and proof-status files associated with a worktree path.
+#
+# @decision DEC-WORKTREE-004
+# @title Breadcrumb cleanup on worktree removal
+# @status accepted
+# @rationale When a worktree is removed (via cleanup or sweep), its associated state files
+#   in ~/.claude/ persist: .active-worktree-path-{phash} breadcrumbs and .active-worktree-path
+#   (legacy). These stale breadcrumbs cause resolve_proof_file() to try to read a now-deleted
+#   worktree path, falling back to the scoped orchestrator file which may contain stale
+#   "verified" status from a prior session. This triggers the dedup guard in check-tester.sh
+#   incorrectly. Cleaning breadcrumbs on worktree removal prevents this class of bug.
+#   The worktree's own .proof-status is inside the directory and removed with it; we only
+#   need to clean the orchestrator-side breadcrumbs and scoped state files.
+clean_worktree_state() {
+    local worktree_path="$1"
+    local claude_dir="${2:-$CLAUDE_STATE_DIR}"
+    local cleaned=0
+
+    # Compute the project hash for this worktree path
+    local phash
+    phash=$(echo "$worktree_path" | shasum -a 256 | cut -c1-8 2>/dev/null || echo "")
+
+    # Remove scoped breadcrumb: .active-worktree-path-{phash}
+    if [[ -n "$phash" ]]; then
+        local scoped_breadcrumb="$claude_dir/.active-worktree-path-${phash}"
+        if [[ -f "$scoped_breadcrumb" ]]; then
+            rm -f "$scoped_breadcrumb"
+            cleaned=$((cleaned + 1))
+            echo "  Cleaned breadcrumb: $scoped_breadcrumb" >&2
+        fi
+
+        # Remove scoped proof-status: .proof-status-{phash}
+        local scoped_proof="$claude_dir/.proof-status-${phash}"
+        if [[ -f "$scoped_proof" ]]; then
+            rm -f "$scoped_proof"
+            cleaned=$((cleaned + 1))
+            echo "  Cleaned proof-status: $scoped_proof" >&2
+        fi
+    fi
+
+    # Remove legacy breadcrumb only if it points to this specific worktree
+    local legacy_breadcrumb="$claude_dir/.active-worktree-path"
+    if [[ -f "$legacy_breadcrumb" ]]; then
+        local legacy_target
+        legacy_target=$(cat "$legacy_breadcrumb" 2>/dev/null | tr -d '[:space:]')
+        if [[ "$legacy_target" == "$worktree_path" ]]; then
+            rm -f "$legacy_breadcrumb"
+            cleaned=$((cleaned + 1))
+            echo "  Cleaned legacy breadcrumb: $legacy_breadcrumb" >&2
+        fi
+    fi
+
+    return 0
 }
 
 # Check if PID is alive
@@ -386,6 +444,10 @@ cmd_cleanup() {
         # recover the orchestrator's Bash tool CWD on the next command.
         echo "$path" > "$HOME/.claude/.cwd-recovery-needed" 2>/dev/null || true
 
+        # Clean breadcrumbs and scoped state files BEFORE removing the directory,
+        # so we can still read any symlink/path data if needed. (DEC-WORKTREE-004)
+        clean_worktree_state "$path" "$CLAUDE_STATE_DIR"
+
         # Remove via git worktree remove (from main worktree for safety)
         if (cd "$main_wt" && git worktree remove "$path" 2>/dev/null); then
             removed=$((removed + 1))
@@ -416,7 +478,7 @@ cmd_prune() {
 
     local pruned=0
     local tmp="${REGISTRY}.tmp"
-    > "$tmp"
+    true > "$tmp"
 
     while IFS=$'\t' read -r path branch issue session pid created_at; do
         if [[ -d "$path" ]]; then
@@ -576,6 +638,8 @@ cmd_sweep() {
         if [[ "$PWD" == "$wt_path"* ]]; then
             cd "$main_wt" || cd "$HOME"
         fi
+        # Clean breadcrumbs before removing directory (DEC-WORKTREE-004)
+        clean_worktree_state "$wt_path" "$CLAUDE_STATE_DIR"
         rm -rf "$wt_path" 2>/dev/null || true
         echo "Removed husk: $wt_path"
         removed_count=$((removed_count + 1))
@@ -593,6 +657,8 @@ cmd_sweep() {
             if [[ "$PWD" == "$wt_path"* ]]; then
                 cd "$main_wt" || cd "$HOME"
             fi
+            # Clean breadcrumbs before removing directory (DEC-WORKTREE-004)
+            clean_worktree_state "$wt_path" "$CLAUDE_STATE_DIR"
             rm -rf "$wt_path" 2>/dev/null || true
             echo "Removed orphan: $wt_path"
             removed_count=$((removed_count + 1))
@@ -615,9 +681,14 @@ cmd_sweep() {
         fi
     done
 
-    # Prune ghosts from registry
+    # Prune ghosts from registry and clean their state files (DEC-WORKTREE-004)
+    # Ghosts are worktrees whose directories are already gone — the breadcrumbs
+    # that point to them may still be alive and causing stale state issues.
     local ghost_count="${#ghosts[@]}"
     if [[ "$ghost_count" -gt 0 ]]; then
+        for ghost_path in "${ghosts[@]+"${ghosts[@]}"}"; do
+            clean_worktree_state "$ghost_path" "$CLAUDE_STATE_DIR"
+        done
         cmd_prune 2>/dev/null || true
         echo "Pruned $ghost_count ghost(s) from registry"
     fi

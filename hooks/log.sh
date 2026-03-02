@@ -31,9 +31,12 @@
 #   CLAUDE_DIR and the worktree's .claude/. The breadcrumb file
 #   .active-worktree-path (written by task-track.sh at implementer dispatch)
 #   lets hooks find the active path without scanning all worktrees. Resolution
-#   logic: if breadcrumb exists AND worktree .proof-status is in pending or
-#   verified state → return worktree path; otherwise return CLAUDE_DIR path.
-#   Stale breadcrumbs (deleted worktree) fall back to CLAUDE_DIR safely.
+#   logic: if breadcrumb exists AND worktree .proof-status is in pending,
+#   verified, or needs-verification state → return worktree path; otherwise
+#   return CLAUDE_DIR path. Stale breadcrumbs (deleted worktree) fall back to
+#   CLAUDE_DIR safely. needs-verification added in W4-2 (Issue #41) so that
+#   implementer-dispatched worktrees resolve correctly through the full proof
+#   lifecycle (needs-verification → pending → verified).
 #
 # @decision DEC-ISOLATION-001
 # @title Project-scoped state files via 8-char hash suffix
@@ -181,11 +184,16 @@ resolve_proof_file() {
 
     local worktree_proof="$worktree_path/.claude/.proof-status"
 
-    # Check if worktree has an active proof-status (pending or verified only)
+    # Check if worktree has an active proof-status (pending, verified, or needs-verification)
+    # needs-verification is written by task-track.sh at implementer dispatch — it must resolve
+    # to the worktree path so check-tester.sh reads/writes the correct file. Previously, only
+    # "pending" and "verified" were accepted, causing needs-verification to fall through to the
+    # scoped (orchestrator) file. This caused the dedup guard in check-tester.sh to fire when
+    # the scoped file had stale "verified" from a prior test or session. (Fix: W4-2, Issue #41)
     if [[ -f "$worktree_proof" ]]; then
         local wt_status
         wt_status=$(cut -d'|' -f1 "$worktree_proof" 2>/dev/null || echo "")
-        if [[ "$wt_status" == "pending" || "$wt_status" == "verified" ]]; then
+        if [[ "$wt_status" == "pending" || "$wt_status" == "verified" || "$wt_status" == "needs-verification" ]]; then
             echo "$worktree_proof"
             return
         fi

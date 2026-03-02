@@ -109,33 +109,55 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Helper: source log.sh and call resolve_proof_file() with mock env
+# Sets CLAUDE_DIR and PROJECT_ROOT so project_hash() computes from a known
+# directory, making the expected scoped file name predictable in tests.
+# Also uses a scoped breadcrumb (.active-worktree-path-{phash}) matching the
+# real production format since PROJECT_ROOT is set.
 call_resolve_proof_file() {
     local claude_dir="$1"
     local breadcrumb_content="${2:-}"  # empty = no breadcrumb
+    # Use claude_dir as PROJECT_ROOT so phash is deterministic
+    local project_root="$claude_dir"
 
-    local breadcrumb_file="$claude_dir/.active-worktree-path"
+    # Compute phash the same way log.sh does
+    local phash
+    phash=$(echo "$project_root" | shasum -a 256 | cut -c1-8 2>/dev/null || echo "00000000")
+
+    # Write breadcrumb using the scoped format (production format)
+    local breadcrumb_file="$claude_dir/.active-worktree-path-${phash}"
     if [[ -n "$breadcrumb_content" ]]; then
         echo "$breadcrumb_content" > "$breadcrumb_file"
     else
         rm -f "$breadcrumb_file"
+        rm -f "$claude_dir/.active-worktree-path"  # also remove legacy
     fi
 
     # Source log.sh and call resolve_proof_file
     bash -c "
         source '$HOOKS_DIR/log.sh'
         CLAUDE_DIR='$claude_dir'
+        PROJECT_ROOT='$project_root'
         resolve_proof_file
     " 2>/dev/null
 }
 
-run_test "resolve_proof_file: no breadcrumb returns CLAUDE_DIR path"
+# Helper: compute the scoped proof-status path for a given CLAUDE_DIR
+# Used to build expected paths in tests that match the scoped format.
+scoped_proof_path() {
+    local claude_dir="$1"
+    local phash
+    phash=$(echo "$claude_dir" | shasum -a 256 | cut -c1-8 2>/dev/null || echo "00000000")
+    echo "$claude_dir/.proof-status-${phash}"
+}
+
+run_test "resolve_proof_file: no breadcrumb returns scoped CLAUDE_DIR path"
 TEMP_CLAUDE=$(mktemp -d "$PROJECT_ROOT/tmp/test-rpf-XXXXXX")
 RESULT=$(call_resolve_proof_file "$TEMP_CLAUDE" "")
-EXPECTED="$TEMP_CLAUDE/.proof-status"
+EXPECTED=$(scoped_proof_path "$TEMP_CLAUDE")
 if [[ "$RESULT" == "$EXPECTED" ]]; then
     pass_test
 else
-    fail_test "Expected '$EXPECTED', got '$RESULT'"
+    fail_test "Expected scoped path '$EXPECTED', got '$RESULT'"
 fi
 rm -rf "$TEMP_CLAUDE"
 
@@ -167,45 +189,47 @@ else
 fi
 rm -rf "$TEMP_CLAUDE" "$TEMP_WORKTREE"
 
-run_test "resolve_proof_file: stale breadcrumb (deleted worktree) returns CLAUDE_DIR path"
+run_test "resolve_proof_file: stale breadcrumb (deleted worktree) returns scoped CLAUDE_DIR path"
 TEMP_CLAUDE=$(mktemp -d "$PROJECT_ROOT/tmp/test-rpf-XXXXXX")
 # Breadcrumb points to a path that doesn't exist
 RESULT=$(call_resolve_proof_file "$TEMP_CLAUDE" "/nonexistent/path/that/does/not/exist")
-EXPECTED="$TEMP_CLAUDE/.proof-status"
+EXPECTED=$(scoped_proof_path "$TEMP_CLAUDE")
 if [[ "$RESULT" == "$EXPECTED" ]]; then
     pass_test
 else
-    fail_test "Expected fallback to CLAUDE_DIR path '$EXPECTED', got '$RESULT'"
+    fail_test "Expected fallback to scoped CLAUDE_DIR path '$EXPECTED', got '$RESULT'"
 fi
 rm -rf "$TEMP_CLAUDE"
 
-run_test "resolve_proof_file: breadcrumb worktree without proof-status returns CLAUDE_DIR path"
+run_test "resolve_proof_file: breadcrumb worktree without proof-status returns scoped CLAUDE_DIR path"
 TEMP_CLAUDE=$(mktemp -d "$PROJECT_ROOT/tmp/test-rpf-XXXXXX")
 TEMP_WORKTREE=$(mktemp -d "$PROJECT_ROOT/tmp/test-rpf-wt-XXXXXX")
 mkdir -p "$TEMP_WORKTREE/.claude"
 # No .proof-status in worktree
 RESULT=$(call_resolve_proof_file "$TEMP_CLAUDE" "$TEMP_WORKTREE")
-EXPECTED="$TEMP_CLAUDE/.proof-status"
+EXPECTED=$(scoped_proof_path "$TEMP_CLAUDE")
 if [[ "$RESULT" == "$EXPECTED" ]]; then
     pass_test
 else
-    fail_test "Expected fallback '$EXPECTED', got '$RESULT'"
+    fail_test "Expected scoped fallback '$EXPECTED', got '$RESULT'"
 fi
 rm -rf "$TEMP_CLAUDE" "$TEMP_WORKTREE"
 
-run_test "resolve_proof_file: breadcrumb worktree with needs-verification returns CLAUDE_DIR path (only active states)"
+run_test "resolve_proof_file: breadcrumb worktree with needs-verification returns WORKTREE path (W4-2 fix)"
 TEMP_CLAUDE=$(mktemp -d "$PROJECT_ROOT/tmp/test-rpf-XXXXXX")
 TEMP_WORKTREE=$(mktemp -d "$PROJECT_ROOT/tmp/test-rpf-wt-XXXXXX")
 mkdir -p "$TEMP_WORKTREE/.claude"
-# needs-verification is an orchestrator-side state, not a worktree state
-# The worktree tester writes "pending"; orchestrator task-track writes "needs-verification"
+# needs-verification is written by task-track.sh at implementer dispatch.
+# W4-2 fix: must return the worktree path (not CLAUDE_DIR) so check-tester.sh
+# reads/writes the correct file and the dedup guard does not fire on stale
+# orchestrator-side "verified" from a prior session. (Issue #41)
 echo "needs-verification|12345" > "$TEMP_WORKTREE/.claude/.proof-status"
 RESULT=$(call_resolve_proof_file "$TEMP_CLAUDE" "$TEMP_WORKTREE")
-EXPECTED="$TEMP_CLAUDE/.proof-status"
+EXPECTED="$TEMP_WORKTREE/.claude/.proof-status"
 if [[ "$RESULT" == "$EXPECTED" ]]; then
     pass_test
 else
-    fail_test "Expected fallback for needs-verification '$EXPECTED', got '$RESULT'"
+    fail_test "Expected worktree path '$EXPECTED', got '$RESULT' (W4-2: needs-verification should resolve to worktree)"
 fi
 rm -rf "$TEMP_CLAUDE" "$TEMP_WORKTREE"
 
@@ -213,17 +237,17 @@ rm -rf "$TEMP_CLAUDE" "$TEMP_WORKTREE"
 # Part C: task-track.sh — breadcrumb written at implementer dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
-run_test "task-track: implementer dispatch writes .active-worktree-path when worktrees exist"
+run_test "task-track: implementer dispatch from main worktree without linked worktrees emits deny (Gate C.1)"
+# Gate C.1 blocks implementer dispatch from the main worktree when no linked worktrees exist.
+# Gate C.2 (writes .proof-status-{phash}) only runs AFTER C.1 passes.
+# This test verifies C.1 fires correctly; C.2 is exercised in the real integration flow.
 TEMP_ORCHESTRATOR=$(mktemp -d "$PROJECT_ROOT/tmp/test-tt-orch-XXXXXX")
 git -C "$TEMP_ORCHESTRATOR" init > /dev/null 2>&1
+git -C "$TEMP_ORCHESTRATOR" commit --allow-empty -m "init" > /dev/null 2>&1
 mkdir -p "$TEMP_ORCHESTRATOR/.claude"
 
-# Create a fake worktree directory (simulated)
-TEMP_WORKTREE=$(mktemp -d "$PROJECT_ROOT/tmp/test-tt-wt-XXXXXX")
-git -C "$TEMP_WORKTREE" init > /dev/null 2>&1
-
-# Stub git worktree list to return our fake worktree
-INPUT_JSON=$(cat <<EOF
+TT_INPUT_FILE=$(mktemp "$PROJECT_ROOT/tmp/test-tt-input-XXXXXX.json")
+cat > "$TT_INPUT_FILE" <<'TTEOF'
 {
   "tool_name": "Task",
   "tool_input": {
@@ -231,30 +255,22 @@ INPUT_JSON=$(cat <<EOF
     "instructions": "Test implementation"
   }
 }
-EOF
-)
+TTEOF
 
-# Run with stub — the worktree is detected by `git worktree list` in TEMP_ORCHESTRATOR
-# Since TEMP_ORCHESTRATOR has no linked worktrees, breadcrumb won't be written
-# (This tests the "has worktrees" branch separately below)
-cd "$TEMP_ORCHESTRATOR" && \
-    CLAUDE_PROJECT_DIR="$TEMP_ORCHESTRATOR" \
-    echo "$INPUT_JSON" | bash "$HOOKS_DIR/task-track.sh" > /dev/null 2>&1
+# task-track.sh exits 0 even on deny (emit_deny exits 0 with JSON deny body)
+TT_OUTPUT=$(CLAUDE_PROJECT_DIR="$TEMP_ORCHESTRATOR" \
+    bash -c "cd '$TEMP_ORCHESTRATOR' && bash '$HOOKS_DIR/task-track.sh' < '$TT_INPUT_FILE'" 2>/dev/null || true)
 
-# Confirm .proof-status was created (Gate C still works)
-if [[ -f "$TEMP_ORCHESTRATOR/.claude/.proof-status" ]]; then
-    STATUS=$(cut -d'|' -f1 "$TEMP_ORCHESTRATOR/.claude/.proof-status")
-    if [[ "$STATUS" == "needs-verification" ]]; then
-        pass_test
-    else
-        fail_test "Gate C: wrong status '$STATUS' (expected needs-verification)"
-    fi
+rm -f "$TT_INPUT_FILE"
+
+# Gate C.1 should emit a deny response (no linked worktrees)
+if echo "$TT_OUTPUT" | grep -q '"permissionDecision":"deny"'; then
+    pass_test
 else
-    fail_test "Gate C: .proof-status not created"
+    fail_test "Expected Gate C.1 deny for implementer on main worktree without linked worktrees. Output: $TT_OUTPUT"
 fi
 
-cd "$PROJECT_ROOT"
-rm -rf "$TEMP_ORCHESTRATOR" "$TEMP_WORKTREE"
+rm -rf "$TEMP_ORCHESTRATOR"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Part D: prompt-submit.sh — dual-write when user types "verified"

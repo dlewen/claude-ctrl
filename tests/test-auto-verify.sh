@@ -448,23 +448,45 @@ fi
 # ---------------------------------------------------------------------------
 run_test "Fix 1 safety net: missing proof-status + response text → auto-written as pending"
 
-REAL_PROOF_FILE=$(resolve_real_proof_file)
-SAVED_PROOF=""
-if [[ -f "$REAL_PROOF_FILE" ]]; then
-    SAVED_PROOF=$(cat "$REAL_PROOF_FILE")
-    rm -f "$REAL_PROOF_FILE"
-fi
+# This test must clear ALL proof-status paths that resolve_proof_file() could use,
+# including both the worktree path AND the orchestrator scoped path, so the hook
+# starts with a truly empty proof state and the safety net can write "pending".
+#
+# W4-2 context: resolve_proof_file() now returns the worktree path when the worktree
+# has a proof file with any active status. When the worktree proof is deleted, the
+# function falls back to the orchestrator scoped path (~/.claude/.proof-status-{phash}).
+# That file may have stale "verified" from prior test runs.
+#
+# Strategy: clear ALL .proof-status* files across all locations the hook might check,
+# saving them for restore after the test.
 
-# Also clear the legacy .proof-status so the backward-compat fallback in
-# resolve_proof_file() doesn't return a stale "verified" from a prior test.
-# DEC-ISOLATION-001: resolve_proof_file() falls back to .proof-status when no
-# scoped file exists — the dedup guard in check-tester.sh would fire on it.
-_LEGACY_PROOF="$(dirname "$REAL_PROOF_FILE")/.proof-status"
-_SAVED_LEGACY=""
-if [[ -f "$_LEGACY_PROOF" ]]; then
-    _SAVED_LEGACY=$(cat "$_LEGACY_PROOF")
-    rm -f "$_LEGACY_PROOF"
-fi
+# Iteratively clear all proof-status paths that resolve_proof_file() could return.
+# With W4-2, resolve_proof_file() has up to 3 fallback levels:
+#   1. Worktree: <worktree>/.claude/.proof-status
+#   2. Orchestrator scoped: ~/.claude/.proof-status-{phash}
+#   3. Orchestrator legacy: ~/.claude/.proof-status
+# We clear level by level, saving each for restore after the test.
+_T9_CLEARED_FILES=()
+_T9_SAVED_CONTENTS=()
+REAL_PROOF_FILE=""
+
+for _i in 1 2 3 4; do
+    _pf=$(resolve_real_proof_file)
+    [[ -z "$_pf" ]] && break
+    if [[ -f "$_pf" ]]; then
+        _T9_CLEARED_FILES+=("$_pf")
+        _T9_SAVED_CONTENTS+=("$(cat "$_pf")")
+        rm -f "$_pf"
+        # Record the first (primary) path for result checking
+        [[ -z "$REAL_PROOF_FILE" ]] && REAL_PROOF_FILE="$_pf"
+    else
+        # Path returned but no file — this is the target write path
+        [[ -z "$REAL_PROOF_FILE" ]] && REAL_PROOF_FILE="$_pf"
+        break
+    fi
+done
+
+_LEGACY_PROOF="${REAL_PROOF_FILE}"  # placeholder for compat with restore below
 
 # Response WITHOUT AUTOVERIFY signal — so auto-verify doesn't fire.
 # The safety net should still write "pending".
@@ -473,22 +495,28 @@ MOCK_JSON=$(jq -n --arg r "$SN_RESP_TEXT" '{"last_assistant_message": $r}')
 
 HOOK_OUTPUT=$(echo "$MOCK_JSON" | bash "$HOOKS_DIR/check-tester.sh" 2>/dev/null || true)
 
-PROOF_AFTER=""
-if [[ -f "$REAL_PROOF_FILE" ]]; then
-    PROOF_AFTER=$(cut -d'|' -f1 "$REAL_PROOF_FILE" 2>/dev/null || echo "")
-fi
+# Read result: check ALL proof-status locations the hook might have written
+PROOF_AFTER=$(resolve_real_proof_file | xargs -I{} cat "{}" 2>/dev/null | cut -d'|' -f1 || echo "")
 
-# Restore scoped file
-if [[ -n "$SAVED_PROOF" ]]; then
-    echo "$SAVED_PROOF" > "$REAL_PROOF_FILE"
-else
-    rm -f "$REAL_PROOF_FILE"
-fi
-# Restore legacy file
-if [[ -n "$_SAVED_LEGACY" ]]; then
-    echo "$_SAVED_LEGACY" > "$_LEGACY_PROOF"
-else
-    rm -f "$_LEGACY_PROOF"
+# Restore all cleared proof files (in original order)
+_T9_IDX=0
+for _saved_pf in "${_T9_CLEARED_FILES[@]+"${_T9_CLEARED_FILES[@]}"}"; do
+    _saved_content="${_T9_SAVED_CONTENTS[$_T9_IDX]:-}"
+    if [[ -n "$_saved_content" ]]; then
+        echo "$_saved_content" > "$_saved_pf"
+    else
+        rm -f "$_saved_pf"
+    fi
+    _T9_IDX=$((_T9_IDX + 1))
+done
+# Also remove any NEW proof-status file the hook may have written
+_pf_after=$(resolve_real_proof_file)
+_found_in_cleared=false
+for _pf in "${_T9_CLEARED_FILES[@]+"${_T9_CLEARED_FILES[@]}"}"; do
+    [[ "$_pf" == "$_pf_after" ]] && _found_in_cleared=true && break
+done
+if [[ "$_found_in_cleared" == "false" && -f "$_pf_after" ]]; then
+    rm -f "$_pf_after"
 fi
 
 if [[ "$PROOF_AFTER" == "pending" ]]; then
