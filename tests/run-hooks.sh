@@ -1591,6 +1591,7 @@ V2_TEST_FILES=(
     "test-plan-lifecycle.sh"
     "test-plan-injection.sh"
     "test-trace-classification.sh"
+    "test-validation-harness.sh"
 )
 
 for test_file in "${V2_TEST_FILES[@]}"; do

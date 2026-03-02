@@ -1,0 +1,13 @@
+{
+  "agent_type": "implementer",
+  "checked_at": "2026-03-01T20:30:00Z",
+  "artifacts": {
+    "summary.md": {"present": true, "source": "agent"},
+    "test-output.txt": {"present": false, "source": null},
+    "files-changed.txt": {"present": false, "source": null},
+    "diff.patch": {"present": false, "source": null}
+  },
+  "test_result": "fail",
+  "test_result_source": "compliance.json",
+  "issues_count": 2
+}

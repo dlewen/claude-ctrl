@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "trace_id": "unknown-partial",
+  "agent_type": "unknown",
+  "session_id": "fixture-session-unknown-partial",
+  "project": "__PROJECT_ROOT__",
+  "project_name": "test-project",
+  "branch": "feature/test",
+  "start_commit": "__START_SHA__",
+  "started_at": "__STARTED_AT__",
+  "status": "active"
+}

@@ -1,0 +1,10 @@
+{
+  "agent_type": "unknown",
+  "checked_at": "2026-03-01T20:30:00Z",
+  "artifacts": {
+    "summary.md": {"present": true, "source": "agent"}
+  },
+  "test_result": "not-provided",
+  "test_result_source": null,
+  "issues_count": 0
+}

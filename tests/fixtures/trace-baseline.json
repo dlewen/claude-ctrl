@@ -1,0 +1,17 @@
+{
+  "version": "1",
+  "generated_at": "2026-03-02",
+  "classifications": {
+    "guardian-success": "success",
+    "guardian-partial": "partial",
+    "guardian-failure": "failure",
+    "tester-success": "success",
+    "tester-partial": "partial",
+    "planner-success": "success",
+    "planner-timeout": "timeout",
+    "implementer-success": "success",
+    "implementer-failure": "failure",
+    "unknown-partial": "partial",
+    "crashed-no-summary": "crashed"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "trace_id": "planner-timeout",
+  "agent_type": "planner",
+  "session_id": "fixture-session-planner-timeout",
+  "project": "__PROJECT_ROOT__",
+  "project_name": "test-project",
+  "branch": "main",
+  "start_commit": "__START_SHA__",
+  "started_at": "2026-03-01T08:00:00Z",
+  "status": "active"
+}

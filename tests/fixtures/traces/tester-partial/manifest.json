@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "trace_id": "tester-partial",
+  "agent_type": "tester",
+  "session_id": "fixture-session-tester-partial",
+  "project": "__PROJECT_ROOT__",
+  "project_name": "test-project",
+  "branch": "feature/test",
+  "start_commit": "__START_SHA__",
+  "started_at": "2026-03-01T20:00:00Z",
+  "status": "active"
+}

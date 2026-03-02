@@ -45,6 +45,9 @@ chrome/
 tmp/
 fudge-traces/
 traces/
+# Allow test fixture trace directories (static, versioned regression anchors)
+!tests/fixtures/traces/
+!tests/fixtures/traces/**
 image-cache/
 
 # External tool data

@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "trace_id": "guardian-partial",
+  "agent_type": "guardian",
+  "session_id": "fixture-session-guardian-partial",
+  "project": "__PROJECT_ROOT__",
+  "project_name": "test-project",
+  "branch": "main",
+  "start_commit": "__START_SHA__",
+  "started_at": "2026-03-01T20:00:00Z",
+  "status": "active"
+}
