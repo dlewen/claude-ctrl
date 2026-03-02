@@ -113,7 +113,23 @@ if [[ "$AGENT_TYPE" == "guardian" ]]; then
         #   allowing post-write.sh to reset proof verified→pending. The heartbeat touches
         #   the marker every 60s, keeping its timestamp fresh. The || break ensures the
         #   loop terminates when finalize_trace() removes the marker.
-        ( while sleep 60; do touch "$_GUARDIAN_MARKER" 2>/dev/null || break; done ) &
+        #
+        # @decision DEC-GUARDIAN-HEARTBEAT-002
+        # @title Hard 15-minute ceiling on heartbeat to prevent zombie accumulation
+        # @status accepted
+        # @rationale When the Guardian agent fails to start (API rate limit, Opus capacity
+        #   exhaustion), SubagentStop never fires, finalize_trace never runs, and the
+        #   marker is never removed. The original || break exit condition only works when
+        #   the marker file disappears — it cannot detect a missing SubagentStop. This
+        #   created zombie heartbeat processes that ran indefinitely. Forensic analysis
+        #   found 26 orphaned heartbeat processes and 26 stale .active-guardian-* files
+        #   accumulated from failed guardian dispatches. Adding a 15-iteration ceiling
+        #   (15 × 60s = 15 min) self-terminates every heartbeat regardless of marker
+        #   state. 15 min exceeds the longest expected guardian operation (large repo
+        #   push + PR creation + CI wait) while being short enough to prevent permanent
+        #   accumulation. The || break path remains for normal termination (marker removed
+        #   by finalize_trace), so healthy operations continue to self-clean promptly.
+        ( _hb_count=0; while sleep 60; do _hb_count=$((_hb_count+1)); [[ $_hb_count -ge 15 ]] && break; touch "$_GUARDIAN_MARKER" 2>/dev/null || break; done ) &
     fi
     # File missing → no implementation in progress → allow (bootstrap path)
 fi
