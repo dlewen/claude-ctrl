@@ -90,6 +90,7 @@ _print_scope_usage() {
     echo "  state       — State Registry Lint + Multi-Context Pass"
     echo "  fixtures    — Expanded Fixture Coverage (30 new fixture tests)"
     echo "  todo        — todo.sh backlog script unit tests"
+    echo "  scan        — scan-backlog.sh debt marker scanner unit tests"
     echo ""
     echo "No --scope = run all tests (default, backward compatible)."
 }
@@ -134,6 +135,7 @@ _scope_pattern() {
         state)       echo "State Registry Lint|Multi-Context Pass" ;;
         fixtures)    echo "Expanded Fixture Coverage" ;;
         todo)        echo "todo\.sh" ;;
+        scan)        echo "scan-backlog\.sh" ;;
         *)           echo "" ;;
     esac
 }
@@ -2155,6 +2157,168 @@ fi
 
 echo ""
 fi # end: todo.sh
+
+# =============================================================================
+# --- Test: scan-backlog.sh debt marker scanner ---
+# Tests syntax, executability, marker detection, format output, exclusions,
+# and graceful fallback when rg is unavailable.
+# =============================================================================
+if should_run_section "scan-backlog.sh"; then
+echo "--- scan-backlog.sh ---"
+SCAN_SCRIPT="$SCRIPT_DIR/../scripts/scan-backlog.sh"
+SCAN_FIXTURES="$SCRIPT_DIR/fixtures/scan-test"
+
+# 1. Syntax valid
+if bash -n "$SCAN_SCRIPT" 2>/dev/null; then
+    pass "scan-backlog.sh — syntax valid"
+else
+    fail "scan-backlog.sh" "syntax error"
+fi
+
+# 2. Executable
+if [[ -x "$SCAN_SCRIPT" ]]; then
+    pass "scan-backlog.sh — is executable"
+else
+    fail "scan-backlog.sh" "not executable (chmod +x required)"
+fi
+
+# 3. Finds TODO markers in fixture
+_SCAN_OUT=$(bash "$SCAN_SCRIPT" "$SCAN_FIXTURES" 2>/dev/null) || _SCAN_EC=$?
+_SCAN_EC="${_SCAN_EC:-0}"
+if echo "$_SCAN_OUT" | grep -q "TODO"; then
+    pass "scan-backlog.sh — finds TODO markers in fixture"
+else
+    fail "scan-backlog.sh TODO" "expected TODO in output, exit=$_SCAN_EC, got: ${_SCAN_OUT:0:200}"
+fi
+
+# 4. Finds FIXME and HACK markers
+if echo "$_SCAN_OUT" | grep -q "FIXME" && echo "$_SCAN_OUT" | grep -q "HACK"; then
+    pass "scan-backlog.sh — finds FIXME and HACK markers"
+else
+    fail "scan-backlog.sh FIXME/HACK" "expected FIXME and HACK in output, got: ${_SCAN_OUT:0:200}"
+fi
+
+# 5. Finds WORKAROUND, OPTIMIZE, TEMP, XXX markers
+_MARKERS_FOUND=true
+for _MARKER in WORKAROUND OPTIMIZE TEMP XXX; do
+    if ! echo "$_SCAN_OUT" | grep -q "$_MARKER"; then
+        _MARKERS_FOUND=false
+        break
+    fi
+done
+if [[ "$_MARKERS_FOUND" == "true" ]]; then
+    pass "scan-backlog.sh — finds WORKAROUND, OPTIMIZE, TEMP, XXX markers"
+else
+    fail "scan-backlog.sh extended markers" "expected all marker types; got: ${_SCAN_OUT:0:300}"
+fi
+
+# 6. --format json produces valid JSON
+_SCAN_JSON=$(bash "$SCAN_SCRIPT" --format json "$SCAN_FIXTURES" 2>/dev/null) || true
+if echo "$_SCAN_JSON" | python3 -m json.tool > /dev/null 2>&1; then
+    pass "scan-backlog.sh --format json — produces valid JSON"
+else
+    fail "scan-backlog.sh json format" "expected valid JSON, got: ${_SCAN_JSON:0:200}"
+fi
+
+# 7. JSON contains expected fields
+if echo "$_SCAN_JSON" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+assert isinstance(data, list), 'not a list'
+assert len(data) > 0, 'empty list'
+first = data[0]
+for field in ('file', 'line', 'type', 'text', 'issue_ref'):
+    assert field in first, f'missing field: {field}'
+print('ok')
+" > /dev/null 2>&1; then
+    pass "scan-backlog.sh json — contains file/line/type/text/issue_ref fields"
+else
+    fail "scan-backlog.sh json fields" "expected {file,line,type,text,issue_ref} in each object"
+fi
+
+# 8. --format table produces markdown table with headers
+if echo "$_SCAN_OUT" | grep -q "| File |" && echo "$_SCAN_OUT" | grep -q "|---"; then
+    pass "scan-backlog.sh --format table — produces markdown table with headers"
+else
+    fail "scan-backlog.sh table headers" "expected '| File |' and '|---' in output"
+fi
+
+# 9. Skips .git directory
+_SCAN_GIT_TMP=$(mktemp -d)
+mkdir -p "$_SCAN_GIT_TMP/.git"
+echo "# TODO: inside git dir — should be skipped" > "$_SCAN_GIT_TMP/.git/should-skip.sh"
+echo "# TODO: outside git dir — should appear" > "$_SCAN_GIT_TMP/should-appear.sh"
+_SCAN_GIT_OUT=$(bash "$SCAN_SCRIPT" "$_SCAN_GIT_TMP" 2>/dev/null) || true
+if echo "$_SCAN_GIT_OUT" | grep -q "should-appear" && ! echo "$_SCAN_GIT_OUT" | grep -q "should-skip"; then
+    pass "scan-backlog.sh — skips .git directory"
+else
+    fail "scan-backlog.sh git exclusion" "expected only 'should-appear.sh', got: ${_SCAN_GIT_OUT:0:200}"
+fi
+safe_cleanup "$_SCAN_GIT_TMP" "$SCRIPT_DIR"
+
+# 10. Clean directory (no markers) returns exit code 1
+_SCAN_CLEAN_TMP=$(mktemp -d)
+echo "# clean file — no markers here" > "$_SCAN_CLEAN_TMP/clean.sh"
+_SCAN_CLEAN_OUT=""
+_SCAN_CLEAN_EC=0
+_SCAN_CLEAN_OUT=$(bash "$SCAN_SCRIPT" "$_SCAN_CLEAN_TMP" 2>/dev/null) || _SCAN_CLEAN_EC=$?
+if [[ "$_SCAN_CLEAN_EC" -eq 1 ]]; then
+    pass "scan-backlog.sh — returns exit code 1 when no markers found"
+else
+    fail "scan-backlog.sh no-markers exit code" "expected exit 1, got $SCAN_CLEAN_EC; output: ${_SCAN_CLEAN_OUT:0:100}"
+fi
+safe_cleanup "$_SCAN_CLEAN_TMP" "$SCRIPT_DIR"
+
+# 11. Fallback to grep when rg is unavailable
+_SCAN_NORG_TMP=$(mktemp -d)
+echo "# TODO: grep fallback test" > "$_SCAN_NORG_TMP/test.sh"
+_SCAN_NORG_OUT=$(PATH=/usr/bin:/bin bash "$SCAN_SCRIPT" "$_SCAN_NORG_TMP" 2>/dev/null) || true
+if echo "$_SCAN_NORG_OUT" | grep -q "TODO"; then
+    pass "scan-backlog.sh — falls back to grep when rg unavailable"
+else
+    fail "scan-backlog.sh grep fallback" "expected TODO in output via grep, got: ${_SCAN_NORG_OUT:0:200}"
+fi
+safe_cleanup "$_SCAN_NORG_TMP" "$SCRIPT_DIR"
+
+# 12. Scans subdirectories recursively
+if echo "$_SCAN_OUT" | grep -q "subdir"; then
+    pass "scan-backlog.sh — scans subdirectories recursively"
+else
+    fail "scan-backlog.sh recursion" "expected 'subdir' in output (nested fixture), got: ${_SCAN_OUT:0:200}"
+fi
+
+# 13. Bad target directory returns exit code 2
+_SCAN_BAD_EC=0
+bash "$SCAN_SCRIPT" "/nonexistent/path/does/not/exist" 2>/dev/null || _SCAN_BAD_EC=$?
+if [[ "$_SCAN_BAD_EC" -eq 2 ]]; then
+    pass "scan-backlog.sh — returns exit code 2 for bad target directory"
+else
+    fail "scan-backlog.sh bad path exit code" "expected exit 2, got $SCAN_BAD_EC"
+fi
+
+# 14. --format json with no markers returns empty array and exit 1
+_SCAN_JSON_EMPTY_TMP=$(mktemp -d)
+echo "# no markers" > "$_SCAN_JSON_EMPTY_TMP/clean.sh"
+_SCAN_JSON_EMPTY_OUT=""
+_SCAN_JSON_EMPTY_EC=0
+_SCAN_JSON_EMPTY_OUT=$(bash "$SCAN_SCRIPT" --format json "$_SCAN_JSON_EMPTY_TMP" 2>/dev/null) || _SCAN_JSON_EMPTY_EC=$?
+if [[ "$_SCAN_JSON_EMPTY_EC" -eq 1 ]] && [[ "$_SCAN_JSON_EMPTY_OUT" == "[]" ]]; then
+    pass "scan-backlog.sh --format json no-markers — returns [] and exit 1"
+else
+    fail "scan-backlog.sh json empty" "expected '[]' and exit 1, got exit=$_SCAN_JSON_EMPTY_EC output='${_SCAN_JSON_EMPTY_OUT}'"
+fi
+safe_cleanup "$_SCAN_JSON_EMPTY_TMP" "$SCRIPT_DIR"
+
+# 15. --help shows usage
+_SCAN_HELP=$(bash "$SCAN_SCRIPT" --help 2>/dev/null) || true
+if echo "$_SCAN_HELP" | grep -q "Usage:"; then
+    pass "scan-backlog.sh --help — shows usage"
+else
+    fail "scan-backlog.sh --help" "expected 'Usage:' in output"
+fi
+
+echo ""
+fi # end: scan-backlog.sh
 
 # --- Summary ---
 echo "==========================="
