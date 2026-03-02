@@ -368,7 +368,11 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
         LEGACY_PROOF="${CLAUDE_DIR}/.proof-status"
         for PROOF_FILE in "$SCOPED_PROOF" "$LEGACY_PROOF"; do
             if [[ -f "$PROOF_FILE" ]]; then
-                PROOF_VAL=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null || echo "")
+                if validate_state_file "$PROOF_FILE" 2; then
+                    PROOF_VAL=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null || echo "")
+                else
+                    PROOF_VAL=""  # corrupt — skip cleanup (leave for manual review)
+                fi
                 if [[ "$PROOF_VAL" == "verified" ]]; then
                     rm -f "$PROOF_FILE"
                     log_info "CHECK-GUARDIAN" "Cleaned $(basename "$PROOF_FILE") after successful commit"

@@ -510,9 +510,15 @@ if $_RUN_SUMMARY; then
     SESS_SUMMARY+="\n$GIT_LINE"
 
     # Proof-of-work status
-    PROOF_STATUS_FILE="${CLAUDE_DIR}/.proof-status"
-    if [[ -f "$PROOF_STATUS_FILE" ]]; then
-        _PROOF_VAL=$(cut -d'|' -f1 "$PROOF_STATUS_FILE" 2>/dev/null || echo "")
+    # Use resolve_proof_file() for worktree-aware resolution (was legacy-only .proof-status).
+    PROOF_STATUS_FILE=$(resolve_proof_file)
+    [[ ! -f "$PROOF_STATUS_FILE" ]] && PROOF_STATUS_FILE=""
+    if [[ -n "$PROOF_STATUS_FILE" && -f "$PROOF_STATUS_FILE" ]]; then
+        if validate_state_file "$PROOF_STATUS_FILE" 2; then
+            _PROOF_VAL=$(cut -d'|' -f1 "$PROOF_STATUS_FILE" 2>/dev/null || echo "")
+        else
+            _PROOF_VAL=""  # corrupt — skip
+        fi
         case "$_PROOF_VAL" in
             verified)           SESS_SUMMARY+="\nProof: verified." ;;
             pending)            SESS_SUMMARY+="\nProof: PENDING." ;;

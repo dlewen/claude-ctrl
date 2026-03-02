@@ -98,7 +98,11 @@ if [[ "${CLAUDE_ENABLE_SUBAGENT_AUTOVERIFY:-}" == "true" ]]; then
 PROOF_FILE=$(resolve_proof_file)
 PROOF_STATUS="missing"
 if [[ -f "$PROOF_FILE" ]]; then
-    PROOF_STATUS=$(cut -d'|' -f1 "$PROOF_FILE")
+    if validate_state_file "$PROOF_FILE" 2; then
+        PROOF_STATUS=$(cut -d'|' -f1 "$PROOF_FILE")
+    else
+        PROOF_STATUS="corrupt"
+    fi
 fi
 
 # Extract response text early — needed for auto-verify
@@ -310,7 +314,11 @@ if [[ -z "${PROOF_FILE:-}" ]]; then
     PROOF_FILE=$(resolve_proof_file)
     PROOF_STATUS="missing"
     if [[ -f "$PROOF_FILE" ]]; then
-        PROOF_STATUS=$(cut -d'|' -f1 "$PROOF_FILE")
+        if validate_state_file "$PROOF_FILE" 2; then
+            PROOF_STATUS=$(cut -d'|' -f1 "$PROOF_FILE")
+        else
+            PROOF_STATUS="corrupt"
+        fi
     fi
 fi
 if [[ -z "${RESPONSE_TEXT+x}" ]]; then
