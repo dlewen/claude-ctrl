@@ -1194,20 +1194,20 @@ if echo "$SL_OUTPUT" | grep -q "dirty"; then
 else
     fail "statusline.sh — dirty count" "expected 'dirty' in output: $SL_OUTPUT"
 fi
-if echo "$SL_OUTPUT" | grep -q "WT:"; then
+if echo "$SL_OUTPUT" | grep -q "wt:"; then
     pass "statusline.sh — shows worktree count from cache"
 else
-    fail "statusline.sh — worktree count" "expected 'WT:' in output: $SL_OUTPUT"
+    fail "statusline.sh — worktree count" "expected 'wt:' in output: $SL_OUTPUT"
 fi
 if echo "$SL_OUTPUT" | grep -q "45%"; then
     pass "statusline.sh — shows context window percentage on line 2"
 else
     fail "statusline.sh — context bar" "expected '45%' in output: $SL_OUTPUT"
 fi
-if echo "$SL_OUTPUT" | grep -qF '$0.42'; then
+if echo "$SL_OUTPUT" | grep -qF '~$0.42'; then
     pass "statusline.sh — shows cost on line 2"
 else
-    fail "statusline.sh — cost display" "expected '\$0.42' in output: $SL_OUTPUT"
+    fail "statusline.sh — cost display" "expected '~\$0.42' in output: $SL_OUTPUT"
 fi
 safe_cleanup "$SL_TEST_DIR" "$SCRIPT_DIR"
 echo ""

@@ -4,10 +4,12 @@
 # Purpose: Pipe sample JSON to statusline.sh and verify:
 #   - Two lines are output (newline separator present)
 #   - Context bar renders for various percentages and null
-#   - Cost renders with correct color thresholds
+#   - Cost renders with correct color thresholds and ~$ prefix
 #   - Duration formats correctly (ms to human-readable)
 #   - Conditional segments appear/disappear correctly
 #   - Cache efficiency calculates and displays correctly
+#   - Domain-clustered line 1: dirty:/wt: labels, agents: label, todos: label
+#   - Token segment: tokens: Nk notation, correct color thresholds
 #
 # @decision DEC-TEST-STATUSLINE-001
 # @title Statusline test suite validates two-line HUD correctness
@@ -160,8 +162,21 @@ test_context_bar_85pct() {
 }
 
 # ============================================================================
-# Test group 3: Cost color thresholds
+# Test group 3: Cost — ~$ prefix and color thresholds
 # ============================================================================
+
+test_cost_tilde_prefix() {
+    run_test
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0.53},"context_window":{}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    if printf '%s' "$line2" | grep -qF '~$0.53'; then
+        pass_test "Cost displays with ~\$ prefix (e.g. ~\$0.53)"
+    else
+        fail_test "Cost missing ~\$ prefix" "line2=$line2"
+    fi
+}
 
 test_cost_display_present() {
     run_test
@@ -169,8 +184,7 @@ test_cost_display_present() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    # Use $'...' quoting to get a literal dollar sign in the pattern
-    if [[ "$line2" == *$'\x240.53'* ]] || printf '%s' "$line2" | grep -qF '$0.53'; then
+    if printf '%s' "$line2" | grep -qF '~$0.53'; then
         pass_test "Cost displays correctly formatted"
     else
         fail_test "Cost not shown or wrong format" "line2=$line2"
@@ -183,8 +197,8 @@ test_cost_zero() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if printf '%s' "$line2" | grep -qF '$0.00'; then
-        pass_test 'Zero cost displays as $0.00'
+    if printf '%s' "$line2" | grep -qF '~$0.00'; then
+        pass_test 'Zero cost displays as ~$0.00'
     else
         fail_test 'Zero cost display wrong' "line2=$line2"
     fi
@@ -196,8 +210,8 @@ test_cost_no_field() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if printf '%s' "$line2" | grep -qF '$0.00'; then
-        pass_test 'Missing cost field defaults to $0.00'
+    if printf '%s' "$line2" | grep -qF '~$0.00'; then
+        pass_test 'Missing cost field defaults to ~$0.00'
     else
         fail_test 'Missing cost field not defaulted' "line2=$line2"
     fi
@@ -267,13 +281,12 @@ test_duration_zero() {
 test_dirty_absent_when_zero() {
     run_test
     # No cache file → cache_dirty defaults to 0
-    # Use workspace basename "cleanws" (avoids substring "dirty" in "nodirty")
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/cleanws"},"cost":{},"context_window":{}}'
     local line1
     line1=$(run_statusline "$json" | head -1 | strip_ansi)
 
-    # Check that the word "dirty" (with a preceding digit, as in "5 dirty") is absent
-    if ! printf '%s' "$line1" | grep -qE '[0-9]+ dirty'; then
+    # Check that "dirty:" label is absent
+    if ! printf '%s' "$line1" | grep -qE 'dirty:'; then
         pass_test "Dirty segment absent when dirty=0"
     else
         fail_test "Dirty segment shown when dirty=0" "line1=$line1"
@@ -313,7 +326,7 @@ test_todos_absent_when_zero() {
     local line1
     line1=$(run_statusline "$json" | head -1 | strip_ansi)
 
-    if [[ "$line1" != *"todo"* ]]; then
+    if [[ "$line1" != *"todos:"* ]]; then
         pass_test "Todos segment absent when no .todo-count file"
     else
         fail_test "Todos shown when .todo-count absent" "line1=$line1"
@@ -334,8 +347,8 @@ test_todos_present_from_file() {
     line1=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null | head -1 | strip_ansi)
     rm -rf "$tmpdir"
 
-    if [[ "$line1" == *"7 todos"* ]]; then
-        pass_test "Todos segment shows count from .todo-count file"
+    if [[ "$line1" == *"todos: 7"* ]]; then
+        pass_test "Todos segment shows count from .todo-count file (todos: 7)"
     else
         fail_test "Todos not shown from file" "line1=$line1"
     fi
@@ -445,6 +458,233 @@ test_no_time_segment() {
 }
 
 # ============================================================================
+# Test group 8: Domain clustering — line 1 label format (REQ-P0-001, REQ-P0-002)
+# ============================================================================
+
+test_dirty_label_format() {
+    run_test
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/.claude"
+    printf '{"dirty":8,"worktrees":2,"agents_active":0,"agents_types":""}' \
+        > "$tmpdir/.claude/.statusline-cache"
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{}}'
+    local line1
+    line1=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null | head -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    if [[ "$line1" == *"dirty: 8"* ]]; then
+        pass_test "Git segment shows 'dirty: N' label format"
+    else
+        fail_test "Git segment not using 'dirty: N' label" "line1=$line1"
+    fi
+}
+
+test_wt_label_format() {
+    run_test
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/.claude"
+    printf '{"dirty":0,"worktrees":2,"agents_active":0,"agents_types":""}' \
+        > "$tmpdir/.claude/.statusline-cache"
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{}}'
+    local line1
+    line1=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null | head -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    if [[ "$line1" == *"wt: 2"* ]]; then
+        pass_test "Git segment shows 'wt: N' label format"
+    else
+        fail_test "Git segment not using 'wt: N' label" "line1=$line1"
+    fi
+}
+
+test_agents_label_format() {
+    run_test
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/.claude"
+    printf '{"dirty":0,"worktrees":0,"agents_active":3,"agents_types":"impl,test"}' \
+        > "$tmpdir/.claude/.statusline-cache"
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{}}'
+    local line1
+    line1=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null | head -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    if [[ "$line1" == *"agents: 3 (impl,test)"* ]]; then
+        pass_test "Agents segment shows 'agents: N (types)' label format"
+    else
+        fail_test "Agents segment not using 'agents: N (types)' label" "line1=$line1"
+    fi
+}
+
+test_todos_label_format() {
+    run_test
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/.claude"
+    echo "10" > "$tmpdir/.claude/.todo-count"
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
+    local line1
+    line1=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null | head -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    if [[ "$line1" == *"todos: 10"* ]]; then
+        pass_test "Todos segment shows 'todos: N' label format"
+    else
+        fail_test "Todos segment not using 'todos: N' label" "line1=$line1"
+    fi
+}
+
+test_domain_clustering_order() {
+    run_test
+    # Line 1 should have: model+workspace BEFORE dirty: BEFORE agents: BEFORE todos:
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/.claude"
+    printf '{"dirty":5,"worktrees":1,"agents_active":2,"agents_types":"impl"}' \
+        > "$tmpdir/.claude/.statusline-cache"
+    echo "3" > "$tmpdir/.claude/.todo-count"
+
+    local json='{"model":{"display_name":"Opus 4.6"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{}}'
+    local line1
+    line1=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null | head -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    # Extract positions
+    local pos_model pos_dirty pos_agents pos_todos
+    pos_model=$(printf '%s' "$line1" | grep -bo 'Opus 4.6' | head -1 | cut -d: -f1)
+    pos_dirty=$(printf '%s' "$line1" | grep -bo 'dirty:' | head -1 | cut -d: -f1)
+    pos_agents=$(printf '%s' "$line1" | grep -bo 'agents:' | head -1 | cut -d: -f1)
+    pos_todos=$(printf '%s' "$line1" | grep -bo 'todos:' | head -1 | cut -d: -f1)
+
+    if [[ -n "$pos_model" && -n "$pos_dirty" && -n "$pos_agents" && -n "$pos_todos" ]] \
+        && (( pos_model < pos_dirty )) \
+        && (( pos_dirty < pos_agents )) \
+        && (( pos_agents < pos_todos )); then
+        pass_test "Domain clustering order: model < dirty < agents < todos"
+    else
+        fail_test "Domain clustering order wrong" \
+            "line1=$line1 | positions: model=$pos_model dirty=$pos_dirty agents=$pos_agents todos=$pos_todos"
+    fi
+}
+
+# ============================================================================
+# Test group 9: Token count segment (REQ-P0-004)
+# ============================================================================
+
+test_tokens_segment_present() {
+    run_test
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    if [[ "$line2" == *"tokens:"* ]]; then
+        pass_test "Token segment present in line 2"
+    else
+        fail_test "Token segment absent from line 2" "line2=$line2"
+    fi
+}
+
+test_tokens_k_notation() {
+    run_test
+    # 100000 + 45000 = 145000 → 145k
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    if [[ "$line2" == *"tokens: 145k"* ]]; then
+        pass_test "Token count 145000 displays as 'tokens: 145k'"
+    else
+        fail_test "Token K notation wrong" "line2=$line2"
+    fi
+}
+
+test_tokens_raw_below_1k() {
+    run_test
+    # 300 + 200 = 500 → 500 (raw, no suffix)
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":300,"total_output_tokens":200}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    if [[ "$line2" == *"tokens: 500"* ]]; then
+        pass_test "Token count 500 displays as 'tokens: 500' (raw, no suffix)"
+    else
+        fail_test "Token raw notation wrong" "line2=$line2"
+    fi
+}
+
+test_tokens_m_notation() {
+    run_test
+    # 1200000 + 300000 = 1500000 → 1.5M
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":1200000,"total_output_tokens":300000}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    if [[ "$line2" == *"tokens: 1.5M"* ]]; then
+        pass_test "Token count 1500000 displays as 'tokens: 1.5M'"
+    else
+        fail_test "Token M notation wrong" "line2=$line2"
+    fi
+}
+
+test_tokens_zero_shows_dim() {
+    run_test
+    # 0 tokens → "tokens: 0", dim color (ESC[2m)
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
+    local line2_raw
+    line2_raw=$(run_statusline "$json" | tail -1)
+
+    # Dim = ESC[2m before "tokens:"
+    if printf '%s' "$line2_raw" | grep -q $'\033\[2mtokens:'; then
+        pass_test "Token count 0 shows in dim color"
+    else
+        fail_test "Token count 0 not dim" "raw: $(printf '%s' "$line2_raw" | cat -v)"
+    fi
+}
+
+test_tokens_high_shows_yellow() {
+    run_test
+    # 600000 total → >500k → yellow (ESC[33m)
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":500000,"total_output_tokens":100000}}'
+    local line2_raw
+    line2_raw=$(run_statusline "$json" | tail -1)
+
+    # Yellow = ESC[33m before "tokens:"
+    if printf '%s' "$line2_raw" | grep -q $'\033\[33mtokens:'; then
+        pass_test "Token count >500k shows in yellow"
+    else
+        fail_test "Token count >500k not yellow" "raw: $(printf '%s' "$line2_raw" | cat -v)"
+    fi
+}
+
+test_tokens_segment_position() {
+    run_test
+    # tokens: segment should appear AFTER context bar and BEFORE cost (~$)
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0.50},"context_window":{"used_percentage":40,"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    local pos_bar pos_tokens pos_cost
+    pos_bar=$(printf '%s' "$line2" | grep -bo '\[' | head -1 | cut -d: -f1)
+    pos_tokens=$(printf '%s' "$line2" | grep -bo 'tokens:' | head -1 | cut -d: -f1)
+    pos_cost=$(printf '%s' "$line2" | grep -bo '~\$' | head -1 | cut -d: -f1)
+
+    if [[ -n "$pos_bar" && -n "$pos_tokens" && -n "$pos_cost" ]] \
+        && (( pos_bar < pos_tokens )) \
+        && (( pos_tokens < pos_cost )); then
+        pass_test "Line 2 order: context bar < tokens: < ~\$cost"
+    else
+        fail_test "Line 2 segment order wrong" \
+            "line2=$line2 | positions: bar=$pos_bar tokens=$pos_tokens cost=$pos_cost"
+    fi
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 
@@ -464,7 +704,8 @@ test_context_bar_60pct
 test_context_bar_85pct
 
 echo ""
-echo "--- Cost ---"
+echo "--- Cost (~\$ prefix) ---"
+test_cost_tilde_prefix
 test_cost_display_present
 test_cost_zero
 test_cost_no_field
@@ -496,6 +737,24 @@ test_no_plan_segment
 test_no_test_segment
 test_no_version_segment
 test_no_time_segment
+
+echo ""
+echo "--- Domain clustering — line 1 labels (REQ-P0-001, REQ-P0-002) ---"
+test_dirty_label_format
+test_wt_label_format
+test_agents_label_format
+test_todos_label_format
+test_domain_clustering_order
+
+echo ""
+echo "--- Token count segment (REQ-P0-004) ---"
+test_tokens_segment_present
+test_tokens_k_notation
+test_tokens_raw_below_1k
+test_tokens_m_notation
+test_tokens_zero_shows_dim
+test_tokens_high_shows_yellow
+test_tokens_segment_position
 
 echo ""
 echo "========================================="
