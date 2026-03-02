@@ -1,0 +1,16 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Should I commit these changes?",
+        "header": "Commit changes",
+        "options": [
+          {"label": "Yes", "description": "Commit the changes"},
+          {"label": "No", "description": "Do not commit"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

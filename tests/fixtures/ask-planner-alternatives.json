@@ -1,0 +1,17 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which architecture should we use for the new feature?",
+        "header": "Architecture decision",
+        "options": [
+          {"label": "Microservices", "description": "Separate services for each domain"},
+          {"label": "Monolith", "description": "Single deployable unit"},
+          {"label": "Modular monolith", "description": "Monolith with clear module boundaries"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

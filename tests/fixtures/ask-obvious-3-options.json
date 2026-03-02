@@ -1,0 +1,17 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which approach should we use?",
+        "header": "Approach selection",
+        "options": [
+          {"label": "Option A (Recommended)", "description": "The standard approach"},
+          {"label": "Option B", "description": "An alternative approach"},
+          {"label": "Option C", "description": "A third approach"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Should we continue with the next phase?",
+        "header": "Next step",
+        "options": [
+          {"label": "Continue", "description": "Proceed to the next phase"},
+          {"label": "Stop", "description": "Stop here"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

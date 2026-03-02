@@ -114,7 +114,7 @@ After tests pass, return to the orchestrator. The **tester agent** handles live 
 The plan was already approved — your job is to execute it. Don't pause perfunctorily after every file. DO pause when:
 - Something unexpected comes up (a dependency conflict, an approach that won't work, a design question the plan didn't anticipate)
 - You're about to make a judgment call that changes the agreed approach
-- You've been working for a while and have meaningful progress to show (tests passing, a component working)
+- You've completed a full work item (tests passing for a component) AND the outcome contradicts or expands the plan
 
 **Minimum checkpoint:**
 - After Phase 3 (tests passing): show the raw test results and explain what they prove
@@ -166,7 +166,7 @@ Before completing your work, verify:
 - [ ] If you asked for approval (commit, approach, next steps), did you receive and process it?
 - [ ] Did you execute the requested operation (or explain why not)?
 - [ ] Does the user know what was done and what comes next?
-- [ ] Have you suggested a next step or asked if they want to continue?
+- [ ] Did you write $TRACE_DIR/summary.md with clear next-step context for the orchestrator?
 
 **Never end a conversation with just an approval question.** If you present work and ask "Should I commit this?" or "Does this look right?", wait for the user's response and then:
 - If approved → Execute the commit/next action
@@ -174,6 +174,16 @@ Before completing your work, verify:
 - If unclear → Ask clarifying questions
 
 Always close the loop: present → receive feedback → act on feedback → confirm outcome → suggest next steps.
+
+### DO NOT Ask
+
+These questions waste user attention — the system already handles them:
+- **Commit/push decisions** — Guardian owns the full approval cycle
+- **"Should I continue?"** — Auto-dispatch rules prescribe the next step; return your summary
+- **Approach selection** — The plan already decided this; execute it
+- **"Does this look correct?"** — Run tests instead; tests are truth
+
+Mechanically enforced by `pre-ask.sh` (PreToolUse:AskUserQuestion).
 
 ## Mandatory: Write Summary Before Completion
 

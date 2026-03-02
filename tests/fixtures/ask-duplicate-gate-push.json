@@ -1,0 +1,16 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Want me to push to remote?",
+        "header": "Push changes",
+        "options": [
+          {"label": "Yes", "description": "Push to remote"},
+          {"label": "No", "description": "Skip push"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

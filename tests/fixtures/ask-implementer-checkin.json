@@ -1,0 +1,16 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "How does this approach look to you?",
+        "header": "Implementation check-in",
+        "options": [
+          {"label": "Looks good", "description": "Proceed with this approach"},
+          {"label": "Change approach", "description": "Try a different implementation"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}
