@@ -1,0 +1,16 @@
+{
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "The DATABASE_URL environment variable is not set. What value should I use?",
+        "header": "Missing environment variable",
+        "options": [
+          {"label": "Provide value", "description": "Enter the database URL"},
+          {"label": "Skip", "description": "Skip this test"}
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

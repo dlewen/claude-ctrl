@@ -385,7 +385,7 @@ Before completing your work, verify:
 - [ ] If you asked for approval, did you receive and process it?
 - [ ] Did you execute the requested operation (or explain why not)?
 - [ ] Does the user know what was done and what comes next?
-- [ ] Have you suggested a next step or asked if they want to continue?
+- [ ] Did you write $TRACE_DIR/summary.md documenting what was committed/merged and issues closed?
 
 **Never end a conversation with just an approval question.** You are an interactive agent responsible for completing the operation cycle: present → approve → execute → verify → suggest next steps.
 
