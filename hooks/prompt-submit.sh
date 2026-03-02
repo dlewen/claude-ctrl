@@ -235,9 +235,29 @@ if [[ -x "$TODO_SCRIPT" ]]; then
     fi
 fi
 
-# --- Detect deferred-work language → suggest /todo ---
+# --- Detect deferred-work language → auto-capture as backlog issue ---
+# @decision DEC-BL-CAPTURE-001
+# @title Fire-and-forget auto-capture in prompt-submit.sh
+# @status accepted
+# @rationale prompt-submit.sh must stay <100ms. Auto-capturing to the backlog
+#   adds persistent value (deferred ideas survive session end) at zero latency
+#   cost: the gh issue create call runs in the background with & so it never
+#   blocks the prompt pipeline. The model is informed of the auto-capture so
+#   it can confirm or offer to refine the issue.
 if echo "$PROMPT" | grep -qiE '\blater\b|\bdefer\b|\bbacklog\b|\beventually\b|\bsomeday\b|\bpark (this|that|it)\b|\bremind me\b|\bcome back to\b|\bfuture\b.*\b(todo|task|idea)\b|\bnote.*(for|to) (later|self)\b'; then
-    CONTEXT_PARTS+=("Deferred-work language detected. Suggest using /backlog to capture this idea so it persists across sessions.")
+    # Extract the deferral sentence (the sentence containing the trigger word)
+    DEFERRAL_TEXT=$(echo "$PROMPT" | grep -oiE '[^.!?]*(\blater\b|\bdefer\b|\bbacklog\b|\beventually\b|\bsomeday\b|\bpark (this|that|it)\b|\bremind me\b|\bcome back to\b|\bfuture\b.*\b(todo|task|idea)\b|\bnote.*(for|to) (later|self)\b)[^.!?]*' | head -1 | xargs || echo "${PROMPT:0:100}")
+    # Fire-and-forget auto-capture — MUST be backgrounded for <100ms compliance
+    # @decision DEC-BL-TRIGGER-001
+    # @title Immediate fire-and-forget auto-capture on deferral detection
+    # @status accepted
+    # @rationale Batching risks data loss on crash; immediate is reliable and
+    #   simple. Background & ensures zero latency impact on the prompt pipeline.
+    TODO_SCRIPT_DEFER="$HOME/.claude/scripts/todo.sh"
+    if [[ -x "$TODO_SCRIPT_DEFER" ]]; then
+        "$TODO_SCRIPT_DEFER" create "$DEFERRAL_TEXT" --context "session:auto-captured" &
+    fi
+    CONTEXT_PARTS+=("Deferred-work language detected. Auto-captured as backlog issue. Use /backlog to review or refine.")
 fi
 
 # --- Mid-session CI status injection ---

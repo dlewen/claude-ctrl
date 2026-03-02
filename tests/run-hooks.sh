@@ -89,6 +89,7 @@ _print_scope_usage() {
     echo "  gate        — Gate hook behavioral tests (branch-guard, doc-gate, test-gate, mock-gate)"
     echo "  state       — State Registry Lint + Multi-Context Pass"
     echo "  fixtures    — Expanded Fixture Coverage (30 new fixture tests)"
+    echo "  todo        — todo.sh backlog script unit tests"
     echo ""
     echo "No --scope = run all tests (default, backward compatible)."
 }
@@ -132,6 +133,7 @@ _scope_pattern() {
         gate)        echo "branch-guard\.sh behavioral|doc-gate\.sh behavioral|test-gate\.sh behavioral|mock-gate\.sh behavioral" ;;
         state)       echo "State Registry Lint|Multi-Context Pass" ;;
         fixtures)    echo "Expanded Fixture Coverage" ;;
+        todo)        echo "todo\.sh" ;;
         *)           echo "" ;;
     esac
 }
@@ -1998,6 +2000,161 @@ else
 fi
 
 fi # end: Expanded Fixture Coverage
+
+# =============================================================================
+# --- Test: todo.sh backlog script ---
+# Tests hud, count --all, create, no-args usage, missing gh graceful exit,
+# and prompt-submit.sh deferral auto-capture integration.
+# =============================================================================
+if should_run_section "todo.sh"; then
+echo "--- todo.sh ---"
+TODO_SCRIPT="$SCRIPT_DIR/../scripts/todo.sh"
+
+# 1. Syntax validation
+if bash -n "$TODO_SCRIPT" 2>/dev/null; then
+    pass "todo.sh — syntax valid"
+else
+    fail "todo.sh" "syntax error"
+fi
+
+# 2. Executable
+if [[ -x "$TODO_SCRIPT" ]]; then
+    pass "todo.sh — is executable"
+else
+    fail "todo.sh" "not executable (chmod +x required)"
+fi
+
+# 3. No-args shows usage (exit 0, stdout contains 'Usage:')
+_TODO_NO_ARGS=$(bash "$TODO_SCRIPT" 2>/dev/null) || true
+if echo "$_TODO_NO_ARGS" | grep -q "Usage:"; then
+    pass "todo.sh no-args — shows usage"
+else
+    fail "todo.sh no-args" "expected 'Usage:' in output: ${_TODO_NO_ARGS:0:100}"
+fi
+
+# 4. Missing gh → graceful exit (exit 0, no output, no stderr)
+# Override PATH to simulate missing gh
+_TODO_NO_GH_STDOUT=$(PATH=/usr/bin:/bin bash "$TODO_SCRIPT" hud 2>/tmp/todo_test_stderr) || true
+_TODO_NO_GH_STDERR=$(cat /tmp/todo_test_stderr 2>/dev/null || echo "")
+rm -f /tmp/todo_test_stderr
+if [[ -z "$_TODO_NO_GH_STDOUT" && -z "$_TODO_NO_GH_STDERR" ]]; then
+    pass "todo.sh hud — graceful exit when gh missing (no output, no stderr)"
+else
+    fail "todo.sh hud missing gh" "expected empty stdout/stderr; got stdout='${_TODO_NO_GH_STDOUT:0:60}' stderr='${_TODO_NO_GH_STDERR:0:60}'"
+fi
+
+# 5. Missing gh + count --all → graceful exit
+_TODO_COUNT_NO_GH=$(PATH=/usr/bin:/bin bash "$TODO_SCRIPT" count --all 2>/tmp/todo_test_stderr2) || true
+_TODO_COUNT_NO_GH_STDERR=$(cat /tmp/todo_test_stderr2 2>/dev/null || echo "")
+rm -f /tmp/todo_test_stderr2
+if [[ -z "$_TODO_COUNT_NO_GH" && -z "$_TODO_COUNT_NO_GH_STDERR" ]]; then
+    pass "todo.sh count --all — graceful exit when gh missing"
+else
+    fail "todo.sh count --all missing gh" "expected empty stdout/stderr; got stdout='${_TODO_COUNT_NO_GH:0:60}' stderr='${_TODO_COUNT_NO_GH_STDERR:0:60}'"
+fi
+
+# 6. Missing gh + create → graceful exit
+_TODO_CREATE_NO_GH=$(PATH=/usr/bin:/bin bash "$TODO_SCRIPT" create "test title" 2>/tmp/todo_test_stderr3) || true
+_TODO_CREATE_NO_GH_STDERR=$(cat /tmp/todo_test_stderr3 2>/dev/null || echo "")
+rm -f /tmp/todo_test_stderr3
+if [[ -z "$_TODO_CREATE_NO_GH" && -z "$_TODO_CREATE_NO_GH_STDERR" ]]; then
+    pass "todo.sh create — graceful exit when gh missing"
+else
+    fail "todo.sh create missing gh" "expected empty stdout/stderr; got stdout='${_TODO_CREATE_NO_GH:0:60}' stderr='${_TODO_CREATE_NO_GH_STDERR:0:60}'"
+fi
+
+# 7. count --all output format: must be N|N|N|N (pipe-delimited 4 integers)
+# Use a mock gh that returns "5" for any query (simulates 5 open issues)
+_TODO_MOCK_DIR=$(mktemp -d)
+cat > "$_TODO_MOCK_DIR/gh" << 'MOCKGH'
+#!/usr/bin/env bash
+# Mock gh: return "5" for issue list queries, succeed for anything else
+case "${*}" in
+    *"issue list"*"--json"*"--jq"*)
+        echo "5"
+        ;;
+    *"repo view"*)
+        echo "owner/testrepo"
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+MOCKGH
+chmod +x "$_TODO_MOCK_DIR/gh"
+
+# Run count --all with mock gh, in a temp HOME so .todo-count writes go there
+_TODO_MOCK_HOME=$(mktemp -d)
+mkdir -p "$_TODO_MOCK_HOME/.claude"
+_TODO_COUNT_OUTPUT=$(HOME="$_TODO_MOCK_HOME" PATH="$_TODO_MOCK_DIR:$PATH" CLAUDE_TODO_GLOBAL_REPO="owner/global-todos" bash "$TODO_SCRIPT" count --all 2>/dev/null) || true
+if echo "$_TODO_COUNT_OUTPUT" | grep -qE '^[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+$'; then
+    pass "todo.sh count --all — returns pipe-delimited N|N|N|N format"
+else
+    fail "todo.sh count --all format" "expected N|N|N|N, got: '${_TODO_COUNT_OUTPUT}'"
+fi
+
+# 8. count --all field semantics: field 3 is config (always 0), field 4 is total
+_F1=$(echo "$_TODO_COUNT_OUTPUT" | cut -d'|' -f1)
+_F2=$(echo "$_TODO_COUNT_OUTPUT" | cut -d'|' -f2)
+_F3=$(echo "$_TODO_COUNT_OUTPUT" | cut -d'|' -f3)
+_F4=$(echo "$_TODO_COUNT_OUTPUT" | cut -d'|' -f4)
+if [[ "$_F3" == "0" ]]; then
+    pass "todo.sh count --all — field 3 (config) is always 0"
+else
+    fail "todo.sh count --all field 3" "expected 0 (config count), got: '$_F3'"
+fi
+_EXPECTED_TOTAL=$(( _F1 + _F2 + _F3 ))
+if [[ "$_F4" == "$_EXPECTED_TOTAL" ]]; then
+    pass "todo.sh count --all — field 4 is sum of fields 1+2+3"
+else
+    fail "todo.sh count --all field 4" "expected total=$_EXPECTED_TOTAL, got: '$_F4'"
+fi
+
+# 9. hud output format when issues exist
+_TODO_HUD_OUTPUT=$(HOME="$_TODO_MOCK_HOME" PATH="$_TODO_MOCK_DIR:$PATH" CLAUDE_TODO_GLOBAL_REPO="owner/global-todos" bash "$TODO_SCRIPT" hud 2>/dev/null) || true
+if echo "$_TODO_HUD_OUTPUT" | grep -qi "backlog:"; then
+    pass "todo.sh hud — returns formatted output containing 'Backlog:'"
+else
+    fail "todo.sh hud format" "expected 'Backlog:' in output, got: '${_TODO_HUD_OUTPUT:0:100}'"
+fi
+
+# 10. hud writes .todo-count file
+if [[ -f "$_TODO_MOCK_HOME/.claude/.todo-count" ]]; then
+    pass "todo.sh hud — writes .todo-count file for statusline cache"
+else
+    fail "todo.sh hud .todo-count" "expected .todo-count to be written at $HOME/.claude/.todo-count"
+fi
+
+safe_cleanup "$_TODO_MOCK_DIR" "$SCRIPT_DIR"
+safe_cleanup "$_TODO_MOCK_HOME" "$SCRIPT_DIR"
+
+# 11. Integration: prompt-submit.sh deferral detection triggers auto-capture path
+# Verify the updated deferral block is present in prompt-submit.sh
+if grep -q "DEC-BL-CAPTURE-001" "$HOOKS_DIR/prompt-submit.sh" 2>/dev/null; then
+    pass "prompt-submit.sh — DEC-BL-CAPTURE-001 auto-capture annotation present"
+else
+    fail "prompt-submit.sh DEC-BL-CAPTURE-001" "auto-capture annotation not found in prompt-submit.sh"
+fi
+if grep -q "DEC-BL-TRIGGER-001" "$HOOKS_DIR/prompt-submit.sh" 2>/dev/null; then
+    pass "prompt-submit.sh — DEC-BL-TRIGGER-001 fire-and-forget annotation present"
+else
+    fail "prompt-submit.sh DEC-BL-TRIGGER-001" "fire-and-forget annotation not found in prompt-submit.sh"
+fi
+if grep -q "Auto-captured as backlog issue" "$HOOKS_DIR/prompt-submit.sh" 2>/dev/null; then
+    pass "prompt-submit.sh — deferral message updated to auto-capture language"
+else
+    fail "prompt-submit.sh deferral message" "expected 'Auto-captured as backlog issue' in prompt-submit.sh"
+fi
+# CRITICAL: background & must be present — prompt-submit must not block on gh
+# The auto-capture line uses $TODO_SCRIPT_DEFER variable, backgrounded with trailing &
+if grep -qE 'TODO_SCRIPT_DEFER.*create.*& *$' "$HOOKS_DIR/prompt-submit.sh" 2>/dev/null; then
+    pass "prompt-submit.sh — auto-capture call is backgrounded with &"
+else
+    fail "prompt-submit.sh background &" "todo.sh create must be fire-and-forget (line ending with &)"
+fi
+
+echo ""
+fi # end: todo.sh
 
 # --- Summary ---
 echo "==========================="
