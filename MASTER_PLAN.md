@@ -160,7 +160,8 @@ Domain clusters:
 - **Cluster F (Line 2 right):** Lines changed + cache — "what happened / efficiency"
 
 #### Phase 1: Statusline Rendering Overhaul
-**Status:** planned
+**Status:** completed
+**Completed:** 2026-03-02
 **Decision IDs:** DEC-SL-LAYOUT-001, DEC-SL-TOKENS-001
 **Requirements:** REQ-P0-001, REQ-P0-002, REQ-P0-003, REQ-P0-004
 **Issues:** #71, #67, #68 (token display only)
@@ -170,40 +171,9 @@ Domain clusters:
 - REQ-P0-003 satisfied: cost displays as `~$X.XX`
 - REQ-P0-004 satisfied: token segment shows K notation from stdin fields
 
-##### Planned Decisions
-- DEC-SL-LAYOUT-001: 2-line domain-clustered layout — 3-line rejected as unnecessary given width analysis — Addresses: REQ-P0-001, REQ-P0-002
-- DEC-SL-TOKENS-001: Compact K notation for tokens — raw numbers unreadable, direction split deferred to P1 — Addresses: REQ-P0-004
-
-##### Work Items
-
-**W1-0: Restructure line 1 with domain clustering and labels (#67)**
-- Reorder segments: model+workspace, then git state (dirty+wt with labels), then agents (with label), then todos
-- Add `dirty:` and `wt:` labels to git segment
-- Add `agents:` label
-- Add `todos:` label (placeholder for split — actual split in Phase 2)
-
-**W1-1: Add token count segment to line 2 (#68)**
-- Extract `total_input_tokens` + `total_output_tokens` from stdin JSON (add to the existing `jq` call)
-- Create `format_tokens()` helper: converts raw count to K notation (e.g., 145234 -> `145k`, 1500000 -> `1.5M`)
-- Insert token segment between context bar and cost: `tokens: 145k`
-- Color: dim when <50k, default when 50k-500k, yellow when >500k
-
-**W1-2: Prefix cost with `~` (#67 quick fix)**
-- Change `$%.2f` format to `~$%.2f` in cost_display printf
-- One-line change
-
-**W1-3: Update label formatting for line 2 segments**
-- Ensure duration, lines-changed, and cache segments have consistent label style
-- Duration already reads well (`12m`); lines and cache may need minor label tweaks
-
-##### Dispatch Plan
-- Dispatch 1: W1-0, W1-1, W1-2, W1-3 (all in statusline.sh, ~1 file, tightly coupled)
-
-##### Critical Files
-- `scripts/statusline.sh` — primary file, all rendering changes happen here
-
 ##### Decision Log
-<!-- Guardian appends here after phase completion -->
+- DEC-SL-LAYOUT-001: 2-line domain-clustered layout — 3-line rejected as unnecessary given width analysis — Addresses: REQ-P0-001, REQ-P0-002 — **Implemented as planned**
+- DEC-SL-TOKENS-001: Compact K notation for tokens — raw numbers unreadable, direction split deferred to P1 — Addresses: REQ-P0-004 — **Implemented as planned**
 
 #### Phase 2: Data Pipeline — Todo Split + Cost Persistence
 **Status:** planned
