@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `feature/integration-gates`: Strengthen integration wiring gates — declaration-trap warnings in tester Phase 2.5 and implementer checklist (catch `mod`/`import` declarations without actual consumers); phantom-reference Check 7b in check-implementer.sh verifies settings.json hook command paths resolve to existing files (DEC-IWIRE-002)
 - `feature/backlog-gaps`: Phase 3 unified gaps report — gaps-report.sh (575 lines) combines debt markers, missing @decision annotations, stale issues, unclosed worktrees, and hook coverage into a single accountability report; /gaps command wrapper; hook dead-code cleanup in log.sh, prompt-submit.sh, state-lib.sh, task-track.sh; 13 new gaps tests (78 total) (#83)
 - `feature/backlog-scanner`: scan-backlog.sh rg-based codebase debt marker scanner (TODO, FIXME, HACK, WORKAROUND, OPTIMIZE, TEMP, XXX) with JSON/table/text output formats, grep fallback, recursive directory scanning; /scan command wrapper for orchestrator dispatch; 15 new scan tests (#82)
 - `feature/statusline-banner`: Redesign initiative segment as Line 0 banner — replace cryptic inline "Robust+1:P0" with dedicated top-line showing full initiative name, phase progress (N/M), and phase title with em dash subtitle; statusline is now 3 lines when active initiative exists, 2 lines otherwise (backward compatible); per-initiative phase counting (DEC-STATUSLINE-004); Group 12 rewritten with 6 banner tests (#91)
