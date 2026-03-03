@@ -54,6 +54,21 @@ if [[ "${HOOK_GATE_SCAN:-}" == "1" ]]; then
     exit 0
 fi
 
+# --- Gate A.0: Duplicate guardian detection ---
+# Prevents burst dispatch: if another Guardian is already active for this project,
+# deny the new dispatch. Fixes RC7 — 5 guardians spawned in 38 seconds.
+if [[ "$AGENT_TYPE" == "guardian" ]]; then
+    _PHASH_A0=$(project_hash "$PROJECT_ROOT")
+    _EXISTING_MARKER=$(find "$TRACE_STORE" -name ".active-guardian-*-${_PHASH_A0}" -newer "$TRACE_STORE" -mmin -10 2>/dev/null | head -1)
+    if [[ -n "$_EXISTING_MARKER" ]]; then
+        # Check if the marker is within TTL (600s)
+        _MARKER_AGE=$(( $(date +%s) - $(stat -f %m "$_EXISTING_MARKER" 2>/dev/null || stat -c %Y "$_EXISTING_MARKER" 2>/dev/null || echo "0") ))
+        if [[ "$_MARKER_AGE" -lt 600 ]]; then
+            emit_deny "Cannot dispatch Guardian: another Guardian is already active for this project (marker: $(basename "$_EXISTING_MARKER"), age: ${_MARKER_AGE}s). Wait for it to complete or clean stale markers."
+        fi
+    fi
+fi
+
 # --- Gate A: Guardian requires .proof-status = verified (when active) ---
 # Gate is only active when .proof-status file exists (created by implementer dispatch).
 # Missing file = no implementation in progress = allow (fixes bootstrap deadlock).
@@ -115,16 +130,18 @@ if [[ "$AGENT_TYPE" == "guardian" ]]; then
         #   loop terminates when finalize_trace() removes the marker.
         #
         # @decision DEC-GUARDIAN-HEARTBEAT-002
-        # @title Existence check + 3-min ceiling replaces broken touch-based exit
+        # @title Existence check + 5-min ceiling replaces broken touch-based exit
         # @status accepted
         # @rationale Two bugs: (1) touch creates the file if missing, so the original
         #   `touch ... || break` never fires — finalize_trace removes the marker, touch
         #   recreates it, heartbeat runs forever. Fix: `[[ -f marker ]] || break` checks
         #   existence without side effects. (2) When guardian agents fail to start (API
         #   rate limit), SubagentStop never fires, marker is never removed. Found 26
-        #   orphaned heartbeats. Fix: 3-iteration ceiling (3 × 60s = 3 min) — guardians
-        #   never legitimately take longer. Both exit paths are now verified by e2e test.
-        ( _hb_count=0; while sleep 60; do _hb_count=$((_hb_count+1)); [[ $_hb_count -ge 3 ]] && break; [[ -f "$_GUARDIAN_MARKER" ]] || break; touch "$_GUARDIAN_MARKER"; done ) &
+        #   orphaned heartbeats. Fix: 5-iteration ceiling (5 × 60s = 5 min) — extended
+        #   from 3 to 5 to accommodate Guardian max_turns=35 long operations (CHANGELOG
+        #   update on feature branch, push with CI, worktree cleanup). Both exit paths
+        #   are verified by e2e test.
+        ( _hb_count=0; while sleep 60; do _hb_count=$((_hb_count+1)); [[ $_hb_count -ge 5 ]] && break; [[ -f "$_GUARDIAN_MARKER" ]] || break; touch "$_GUARDIAN_MARKER"; done ) &
     fi
     # File missing → no implementation in progress → allow (bootstrap path)
 fi

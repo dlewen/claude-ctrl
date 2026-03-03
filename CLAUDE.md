@@ -119,7 +119,7 @@ without prompting. When the task touches unfamiliar areas, read relevant files f
 - Implementer: max_turns=85
 - Planner: max_turns=65
 - Tester: max_turns=40
-- Guardian: max_turns=30
+- Guardian: max_turns=35
 
 **Implementer dispatch sizing:**
 - Phases with 1–3 work items: dispatch all in one implementer call
