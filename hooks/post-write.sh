@@ -69,6 +69,9 @@ if [[ -e "$(dirname "$FILE_PATH")" ]]; then
     cat "$TMPFILE" >> "$TRACKING_FILE"
     rm -f "$TMPFILE"
 
+    # Agent progress breadcrumb for statusline (1 echo per write, no accumulation)
+    echo "$FILE_PATH" > "${TRACKING_DIR}/.agent-progress"
+
     # Log write event to session event log (skip trace artifacts — meta-infrastructure noise)
     if [[ ! "$FILE_PATH" =~ /\.claude/traces/ ]]; then
         append_session_event "write" "{\"file\":\"$FILE_PATH\"}" "$PROJECT_ROOT"

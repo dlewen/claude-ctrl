@@ -429,9 +429,83 @@ fi
 _p1_count=3
 
 # --- Segment P1.4: agents (priority 4, conditional) ---
+# @decision DEC-AGENT-PROGRESS-001
+# @title Enriched agent progress segment: type + elapsed + file count + current file
+# @status accepted
+# @rationale The generic "agents: 1 (implementer)" gave no insight into agent progress
+# during long-running foreground agents (max_turns=85, potentially 40+ minutes). The
+# enriched format "impl 8m 5f guard.sh" shows agent type abbreviation, elapsed time,
+# files touched count, and current file basename — all derived from existing on-disk
+# state files with no new hooks needed. Data sources: .subagent-tracker-* (elapsed),
+# .session-changes-* (file count), .agent-progress (current file, written by post-write.sh).
 _p1_t_3=""; _p1_w_3=0; _p1_p_3=4
 if (( cache_agents > 0 )); then
-  if [[ -n "$cache_agents_types" ]]; then
+  # Read subagent tracker for elapsed time and type
+  _agent_type="" _agent_elapsed=""
+  _tracker_file="${workspace_dir:+$workspace_dir/.claude/.subagent-tracker-${CLAUDE_SESSION_ID:-$$}}"
+  [[ -z "$workspace_dir" ]] && _tracker_file="$HOME/.claude/.subagent-tracker-${CLAUDE_SESSION_ID:-$$}"
+  if [[ -f "$_tracker_file" ]]; then
+    _active_line=$(grep '^ACTIVE|' "$_tracker_file" 2>/dev/null | head -1)
+    if [[ -n "$_active_line" ]]; then
+      _agent_type=$(echo "$_active_line" | cut -d'|' -f2)
+      _start_epoch=$(echo "$_active_line" | cut -d'|' -f3)
+      if [[ "$_start_epoch" =~ ^[0-9]+$ ]]; then
+        _now=$(date +%s)
+        _elapsed_s=$(( _now - _start_epoch ))
+        _elapsed_m=$(( _elapsed_s / 60 ))
+        if (( _elapsed_m >= 60 )); then
+          _agent_elapsed="$(( _elapsed_m / 60 ))h$(( _elapsed_m % 60 ))m"
+        elif (( _elapsed_m > 0 )); then
+          _agent_elapsed="${_elapsed_m}m"
+        else
+          _agent_elapsed="<1m"
+        fi
+      fi
+    fi
+  fi
+
+  # Abbreviate agent type
+  _type_abbr=""
+  case "$_agent_type" in
+    implementer) _type_abbr="impl" ;;
+    tester)      _type_abbr="test" ;;
+    guardian)     _type_abbr="guard" ;;
+    planner)     _type_abbr="plan" ;;
+    *)           _type_abbr="${_agent_type:0:4}" ;;
+  esac
+
+  # Read file count from .session-changes-*
+  _file_count=""
+  _changes_file="${workspace_dir:+$workspace_dir/.claude/.session-changes-${CLAUDE_SESSION_ID:-$$}}"
+  [[ -z "$workspace_dir" ]] && _changes_file="$HOME/.claude/.session-changes-${CLAUDE_SESSION_ID:-$$}"
+  if [[ -f "$_changes_file" ]]; then
+    _fc=$(wc -l < "$_changes_file" 2>/dev/null | tr -d ' ')
+    [[ "${_fc:-0}" -gt 0 ]] && _file_count="${_fc}f"
+  fi
+
+  # Read current file from .agent-progress (stale guard: ignore if >30min old)
+  _current_file=""
+  _progress_file="${workspace_dir:+$workspace_dir/.claude/.agent-progress}"
+  [[ -z "$workspace_dir" ]] && _progress_file="$HOME/.claude/.agent-progress"
+  if [[ -f "$_progress_file" ]]; then
+    _progress_mtime=0
+    if [[ "$(uname)" == "Darwin" ]]; then
+      _progress_mtime=$(stat -f %m "$_progress_file" 2>/dev/null || echo "0")
+    else
+      _progress_mtime=$(stat -c %Y "$_progress_file" 2>/dev/null || echo "0")
+    fi
+    _now=${_now:-$(date +%s)}
+    if (( _now - _progress_mtime < 1800 )); then
+      _current_file=$(basename "$(cat "$_progress_file" 2>/dev/null)" 2>/dev/null || echo "")
+    fi
+  fi
+
+  # Build enriched segment: "impl 8m 5f guard.sh"
+  if [[ -n "$_type_abbr" && -n "$_agent_elapsed" ]]; then
+    _s=$(printf '\033[33m%s\033[0m \033[2m%s\033[0m' "$_type_abbr" "$_agent_elapsed")
+    [[ -n "$_file_count" ]] && _s=$(printf '%s %s' "$_s" "$_file_count")
+    [[ -n "$_current_file" ]] && _s=$(printf '%s \033[36m%s\033[0m' "$_s" "$_current_file")
+  elif [[ -n "$cache_agents_types" ]]; then
     _s=$(printf '\033[33magents: %d (%s)\033[0m' "$cache_agents" "$cache_agents_types")
   else
     _s=$(printf '\033[33magents: %d\033[0m' "$cache_agents")

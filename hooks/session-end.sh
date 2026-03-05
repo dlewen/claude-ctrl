@@ -430,6 +430,7 @@ rm -f "${CLAUDE_DIR}/.track."*
 rm -f "${CLAUDE_DIR}/.skill-result"*
 rm -f "${CLAUDE_DIR}/.subagent-tracker-${CLAUDE_SESSION_ID:-$$}"
 rm -f "${CLAUDE_DIR}/.subagent-tokens-${CLAUDE_SESSION_ID:-$$}"
+rm -f "${CLAUDE_DIR}/.agent-progress"
 rm -f "${CLAUDE_DIR}/.session-main-tokens"
 rm -f "${CLAUDE_DIR}/.cwd-recovery-needed"
 rm -f "${CLAUDE_DIR}/.proof-epoch"*

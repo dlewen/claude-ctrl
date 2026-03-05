@@ -47,6 +47,7 @@ PLAN="$PROJECT_ROOT/MASTER_PLAN.md"
 # Track subagent completion
 track_subagent_stop "$PROJECT_ROOT" "guardian"
 append_session_event "agent_stop" "{\"type\":\"guardian\"}" "$PROJECT_ROOT"
+rm -f "${CLAUDE_DIR}/.agent-progress"
 
 # --- W3-1: Emit `commit` event if Guardian advanced HEAD ---
 # subagent-start.sh saves HEAD SHA when Guardian is spawned.

@@ -345,6 +345,7 @@ fi
 # Track subagent completion
 track_subagent_stop "$PROJECT_ROOT" "tester"
 append_session_event "agent_stop" "{\"type\":\"tester\"}" "$PROJECT_ROOT"
+rm -f "${CLAUDE_DIR}/.agent-progress"
 
 # --- Trace protocol: detect and prepare for finalization ---
 # If detect_active_trace returns empty, log trace_skip (not trace_orphan) — the
