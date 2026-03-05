@@ -215,9 +215,7 @@ fi
 #   behind permanently, blocking future agent dispatch. Sweeping on session start
 #   (1-hour TTL) ensures a crashed session's markers don't block the next session.
 if [[ -d "${CLAUDE_DIR}/traces" ]]; then
-  find "${CLAUDE_DIR}/traces" -name '.active-implementer-*' -mmin +60 -delete 2>/dev/null || true
-  find "${CLAUDE_DIR}/traces" -name '.active-guardian-*' -mmin +60 -delete 2>/dev/null || true
-  find "${CLAUDE_DIR}/traces" -name '.active-autoverify-*' -mmin +60 -delete 2>/dev/null || true
+  find "${CLAUDE_DIR}/traces" \( -name '.active-implementer-*' -o -name '.active-guardian-*' -o -name '.active-autoverify-*' \) -mmin +60 -delete 2>/dev/null || true
 fi
 
 # --- MASTER_PLAN.md tiered injection (DEC-PLAN-004) ---
@@ -247,39 +245,68 @@ get_plan_status "$PROJECT_ROOT"
 # uses juanandresgs/claude-config-pro which IS the project), show project count only.
 # Globals set here are read by write_statusline_cache() as TODO_PROJECT_COUNT and
 # TODO_GLOBAL_COUNT.
+# @decision DEC-STARTUP-PERF-001
+# @title Parallelize GitHub API calls to eliminate serial startup latency
+# @status accepted
+# @rationale session-init.sh made 5 serial gh CLI calls (repo view, issue list x2,
+# run list, todo.sh hud) totaling ~33s. Fix: launch todo + CI queries as background
+# jobs writing to temp files, then collect results. Also removes the redundant
+# todo.sh hud call (duplicated the inline todo counts). Collapses ~33s → ~6s.
 TODO_PROJECT_COUNT=0
 TODO_GLOBAL_COUNT=0
+_GH_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$_GH_TMPDIR"' EXIT
 if command -v gh >/dev/null 2>&1; then
-    # Detect current repo's GitHub remote
-    _CURRENT_REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
-    # Global cc-todos repo (personal backlog)
     _GLOBAL_REPO="juanandresgs/cc-todos"
 
+    # Phase 1: detect current repo from git remote (no network call — was gh repo view @ ~2-10s)
+    _CURRENT_REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||' || echo "")
+
+    # Phase 2: launch todo + CI queries in parallel as background jobs
     if [[ -n "$_CURRENT_REPO" ]]; then
+        # Project todo count (background)
+        (gh issue list --repo "$_CURRENT_REPO" --label claude-todo --state open --json number --jq length 2>/dev/null || echo "0") > "$_GH_TMPDIR/proj" &
+        _PID_PROJ=$!
+
+        if [[ "$_CURRENT_REPO" != "$_GLOBAL_REPO" ]]; then
+            # Global todo count (background)
+            (gh issue list --repo "$_GLOBAL_REPO" --label claude-todo --state open --json number --jq length 2>/dev/null || echo "0") > "$_GH_TMPDIR/glob" &
+            _PID_GLOB=$!
+        fi
+    fi
+
+    # CI tier-2 query (background — launched speculatively; result consumed later only if needed)
+    if has_github_actions "$PROJECT_ROOT" 2>/dev/null; then
+        (gh run list --limit 1 --json conclusion,updatedAt --jq '.[0] | "\(.conclusion)|\(.updatedAt)"' 2>/dev/null || echo "") > "$_GH_TMPDIR/ci" &
+        _PID_CI=$!
+    fi
+
+    # Collect todo results (wait for background jobs)
+    if [[ -n "$_CURRENT_REPO" ]]; then
+        wait "$_PID_PROJ" 2>/dev/null || true
+        _PROJ_COUNT=$(cat "$_GH_TMPDIR/proj" 2>/dev/null || echo "0")
+        [[ "$_PROJ_COUNT" =~ ^[0-9]+$ ]] || _PROJ_COUNT=0
+        TODO_PROJECT_COUNT="$_PROJ_COUNT"
+
         if [[ "$_CURRENT_REPO" == "$_GLOBAL_REPO" ]]; then
-            # Same repo: show as project count only (no double-count)
-            _PROJ_COUNT=$(gh issue list --repo "$_CURRENT_REPO" --label claude-todo --state open --json number --jq length 2>/dev/null || echo "0")
-            TODO_PROJECT_COUNT="${_PROJ_COUNT:-0}"
             TODO_GLOBAL_COUNT=0
-        else
-            # Different repos: count each independently
-            _PROJ_COUNT=$(gh issue list --repo "$_CURRENT_REPO" --label claude-todo --state open --json number --jq length 2>/dev/null || echo "0")
-            TODO_PROJECT_COUNT="${_PROJ_COUNT:-0}"
-            # Read global count from existing .todo-count file (written by todo.sh hud)
-            _TODO_COUNT_FILE="$HOME/.claude/.todo-count"
-            if [[ -f "$_TODO_COUNT_FILE" ]]; then
-                _GLOB=$(cat "$_TODO_COUNT_FILE" 2>/dev/null || echo "0")
-                [[ "$_GLOB" =~ ^[0-9]+$ ]] && TODO_GLOBAL_COUNT="$_GLOB" || TODO_GLOBAL_COUNT=0
-            fi
+        elif [[ -n "${_PID_GLOB:-}" ]]; then
+            wait "$_PID_GLOB" 2>/dev/null || true
+            _GLOB_COUNT=$(cat "$_GH_TMPDIR/glob" 2>/dev/null || echo "0")
+            [[ "$_GLOB_COUNT" =~ ^[0-9]+$ ]] || _GLOB_COUNT=0
+            TODO_GLOBAL_COUNT="$_GLOB_COUNT"
         fi
     else
-        # No GitHub remote: fall back to global count only
+        # No GitHub remote: fall back to cached global count
         _TODO_COUNT_FILE="$HOME/.claude/.todo-count"
         if [[ -f "$_TODO_COUNT_FILE" ]]; then
             _GLOB=$(cat "$_TODO_COUNT_FILE" 2>/dev/null || echo "0")
             [[ "$_GLOB" =~ ^[0-9]+$ ]] && TODO_GLOBAL_COUNT="$_GLOB" || TODO_GLOBAL_COUNT=0
         fi
     fi
+
+    # Write .todo-count for statusline cache fallback
+    echo "$TODO_GLOBAL_COUNT" > "$HOME/.claude/.todo-count" 2>/dev/null || true
 fi
 
 # --- Sum lifetime session cost for statusline display (REQ-P1-001) ---
@@ -822,14 +849,17 @@ if [[ -d "$TRACE_STORE" ]]; then
     fi
 fi
 
-# --- Todo HUD (listing with active-session annotations) ---
-TODO_SCRIPT="$HOME/.claude/scripts/todo.sh"
-if [[ -x "$TODO_SCRIPT" ]] && command -v gh >/dev/null 2>&1; then
-    HUD_OUTPUT=$("$TODO_SCRIPT" hud 2>/dev/null || echo "")
-    if [[ -n "$HUD_OUTPUT" ]]; then
-        while IFS= read -r line; do
-            CONTEXT_PARTS+=("$line")
-        done <<< "$HUD_OUTPUT"
+# --- Todo HUD (inline from already-computed counts — no extra gh calls) ---
+# Replaces the former todo.sh hud call which re-queried the same GitHub API
+# endpoints, adding ~24s of serial latency (DEC-STARTUP-PERF-001).
+_TODO_TOTAL=$(( TODO_PROJECT_COUNT + TODO_GLOBAL_COUNT ))
+if (( _TODO_TOTAL > 0 )); then
+    if (( TODO_PROJECT_COUNT > 0 && TODO_GLOBAL_COUNT > 0 )); then
+        CONTEXT_PARTS+=("Backlog: ${TODO_PROJECT_COUNT} project + ${TODO_GLOBAL_COUNT} global todos pending")
+    elif (( TODO_PROJECT_COUNT > 0 )); then
+        CONTEXT_PARTS+=("Backlog: ${TODO_PROJECT_COUNT} project todos pending")
+    elif (( TODO_GLOBAL_COUNT > 0 )); then
+        CONTEXT_PARTS+=("Backlog: ${TODO_GLOBAL_COUNT} global todos pending")
     fi
 fi
 
@@ -954,9 +984,10 @@ if read_ci_status "$PROJECT_ROOT"; then
     esac
 fi
 
-# Tier 2: Fall back to live gh query when no state file or state is stale
-if [[ "$CI_TIER2_NEEDED" == "true" ]] && has_github_actions "$PROJECT_ROOT"; then
-    _GH_CI_RAW=$(gh run list --limit 1 --json conclusion,updatedAt --jq '.[0] | "\(.conclusion)|\(.updatedAt)"' 2>/dev/null) || _GH_CI_RAW=""
+# Tier 2: Read from background gh query launched earlier (DEC-STARTUP-PERF-001)
+if [[ "$CI_TIER2_NEEDED" == "true" ]] && [[ -n "${_PID_CI:-}" ]]; then
+    wait "$_PID_CI" 2>/dev/null || true
+    _GH_CI_RAW=$(cat "$_GH_TMPDIR/ci" 2>/dev/null || echo "")
     if [[ -n "$_GH_CI_RAW" ]]; then
         _GH_CONCLUSION="${_GH_CI_RAW%%|*}"
         _GH_TIMESTAMP="${_GH_CI_RAW##*|}"
