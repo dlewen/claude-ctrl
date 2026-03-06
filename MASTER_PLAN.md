@@ -98,6 +98,9 @@ The Claude Code configuration directory. It shapes how Claude Code operates acro
 | 2026-03-05 | DEC-MODE-PERSIST-001 | operational-mode-system | Re-classify mode after compaction with Previous Mode hint | Fresh classification safer than stale state; monotonic lattice prevents downgrade |
 | 2026-03-05 | DEC-MODE-BRANCH-001 | operational-mode-system | Mode 2 relaxes branch-guard for non-source files | Guardian approval is sufficient; no protected-non-source list needed |
 | 2026-03-05 | DEC-MODE-PLAN-001 | operational-mode-system | Mode 3 plan-check skip via .op-mode hook-level read | Skips MASTER_PLAN.md required but enforces staleness if plan exists |
+| 2026-03-06 | DEC-DISPATCH-001 | dispatch-enforcement | Restore compact routing table to CLAUDE.md | Full table was extracted (DEC-DISPATCH-EXTRACT-001); model no longer sees "must invoke implementer" every turn |
+| 2026-03-06 | DEC-DISPATCH-002 | dispatch-enforcement | SESSION_ID-based orchestrator detection in session-init.sh | SessionStart fires only for orchestrator; subagents get SubagentStart with different CLAUDE_SESSION_ID |
+| 2026-03-06 | DEC-DISPATCH-003 | dispatch-enforcement | Gate 1.5 in pre-write.sh blocks orchestrator source writes | Closes the enforcement gap: implementer dispatch was instruction-only while Guardian was mechanically enforced |
 
 ---
 
@@ -1375,6 +1378,49 @@ Note: Waves are strictly serial (W1 -> W2 -> W3 -> W4 -> W5). Within each wave, 
 - `hooks/state-lib.sh` -- write_proof_status(), atomic_write() (patterns for write_op_mode)
 - `docs/DISPATCH.md` -- current dispatch routing rules
 - Deep research validation: 103 citations across 3 providers (OpenAI, Perplexity, Gemini)
+
+### Initiative: Dispatch Enforcement
+**Status:** active
+**Started:** 2026-03-06
+**Goal:** Mechanically enforce that the orchestrator dispatches to subagents instead of writing source code directly, closing the enforcement gap that allowed the orchestrator to bypass the implementer dispatch.
+
+> The orchestrator was observed doing implementation work directly instead of dispatching to the implementer agent. Root cause: (1) the dispatch routing table was extracted from CLAUDE.md to docs/DISPATCH.md, removing the "must invoke implementer" signal from every-turn context, and (2) no hook mechanically prevented orchestrator source writes. Guardian dispatch was the ONLY end-to-end enforced dispatch (pre-bash.sh blocks git commit/merge). This initiative restores the instruction signal and adds mechanical enforcement via SESSION_ID-based orchestrator detection.
+
+**Dominant Constraint:** reliability — false positives (blocking legitimate subagent writes) are worse than false negatives (missing an orchestrator bypass)
+
+#### Goals
+- REQ-GOAL-001: Orchestrator never writes source code directly — must dispatch implementer
+- REQ-GOAL-002: Dispatch routing table visible to orchestrator every turn
+- REQ-GOAL-003: Mechanical hook prevents orchestrator source writes even if instructions ignored
+
+#### Requirements
+
+**Must-Have (P0)**
+- REQ-P0-001: Dispatch routing table restored to CLAUDE.md with "Orchestrator May?" column
+- REQ-P0-002: session-init.sh records orchestrator CLAUDE_SESSION_ID in .orchestrator-sid
+- REQ-P0-003: pre-write.sh Gate 1.5 denies source writes when SESSION_ID matches .orchestrator-sid
+- REQ-P0-004: .orchestrator-sid registered in _PROTECTED_STATE_FILES
+
+#### Architectural Decisions
+- DEC-DISPATCH-001: Compact routing table restored to CLAUDE.md (addresses REQ-GOAL-002)
+- DEC-DISPATCH-002: SESSION_ID-based orchestrator detection (addresses REQ-GOAL-003)
+- DEC-DISPATCH-003: Gate 1.5 ordering between branch-guard and plan-check (addresses REQ-P0-003)
+
+#### Phases
+
+##### Phase 1: Wave 1 — Instruction + Infrastructure
+**Status:** in-progress
+- W1-1: Restore dispatch routing table to CLAUDE.md
+- W1-2: session-init.sh writes .orchestrator-sid + core-lib.sh registry + session-end.sh cleanup
+- W1-3: pre-write.sh Gate 1.5 — orchestrator source write guard
+
+##### Phase 2: Wave 2 — Tests
+**Status:** planned
+- W2-1: Tests for orchestrator guard (6 test cases)
+
+#### Dispatch Enforcement Worktree Strategy
+
+- **Wave 1:** `~/.claude/.worktrees/dispatch-enforcement` on branch `feature/dispatch-enforcement`
 
 ---
 

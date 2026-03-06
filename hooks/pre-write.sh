@@ -57,6 +57,7 @@ require_session
 if [[ "${HOOK_GATE_SCAN:-}" == "1" ]]; then
     declare_gate "proof-status-content" "Direct Write/Edit to protected state files (.proof-status, .test-status, .proof-epoch, lock files)" "deny"
     declare_gate "branch-guard-write" "Source writes on main branch" "deny"
+    declare_gate "orchestrator-source-guard" "Source writes from orchestrator context (must use implementer)" "deny"
     declare_gate "plan-check" "Writes without MASTER_PLAN.md" "deny"
     declare_gate "test-gate-write" "Source writes while tests fail" "deny"
     declare_gate "mock-gate" "Test files with internal mocks" "deny"
@@ -192,6 +193,37 @@ else
                     fi
                 fi
             fi
+        fi
+    fi
+fi
+
+# ============================================================
+# Gate 1.5: Orchestrator source write guard
+# Detects and blocks source writes from orchestrator context.
+# The orchestrator must dispatch implementer for all source code work.
+# Uses CLAUDE_SESSION_ID comparison: session-init.sh writes the
+# orchestrator's SID at startup; subagents get different SIDs.
+#
+# @decision DEC-DISPATCH-003
+# @title Gate 1.5: Block source writes from orchestrator context
+# @status accepted
+# @rationale The dispatch routing table says "Orchestrator May? No — MUST invoke
+#   implementer" for implementation work. Previously this was instruction-only with
+#   zero mechanical enforcement. Guardian dispatch was enforced (pre-bash.sh blocks
+#   git commit/merge unless Guardian marker exists) but implementer dispatch was not.
+#   Gate 1.5 closes this gap by comparing CLAUDE_SESSION_ID against .orchestrator-sid
+#   written by session-init.sh. If they match, the caller is the orchestrator, not a
+#   subagent — deny the source write. Backward compatible: missing .orchestrator-sid
+#   or unset CLAUDE_SESSION_ID falls through to allow.
+# ============================================================
+declare_gate "orchestrator-source-guard" "Source writes from orchestrator context (must use implementer)" "deny"
+
+if [[ "$_IN_WORKTREE" == "true" ]] && is_source_file "$FILE_PATH" && ! is_skippable_path "$FILE_PATH"; then
+    _ORCH_SID_FILE="${_CACHED_CLAUDE_DIR}/.orchestrator-sid"
+    if [[ -n "${CLAUDE_SESSION_ID:-}" && -f "$_ORCH_SID_FILE" ]]; then
+        _ORCH_SID=$(cat "$_ORCH_SID_FILE" 2>/dev/null || echo "")
+        if [[ -n "$_ORCH_SID" && "$CLAUDE_SESSION_ID" == "$_ORCH_SID" ]]; then
+            emit_deny "BLOCKED: Source writes from orchestrator context. The orchestrator must dispatch an implementer subagent for all source code work (Sacred Practice #2 + Dispatch Rules). Use: Agent tool with subagent_type=implementer, prompt describing the task, working in this worktree."
         fi
     fi
 fi

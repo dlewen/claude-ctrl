@@ -59,6 +59,21 @@ CLAUDE_DIR=$(get_claude_dir)
 _PHASH=$(project_hash "$PROJECT_ROOT")
 CONTEXT_PARTS=()
 
+# --- Record orchestrator session ID for dispatch enforcement ---
+# @decision DEC-DISPATCH-002
+# @title SESSION_ID-based orchestrator detection for pre-write.sh Gate 1.5
+# @status accepted
+# @rationale SessionStart fires ONLY for the top-level orchestrator process.
+#   Subagents receive SubagentStart, not SessionStart. CLAUDE_SESSION_ID differs
+#   between orchestrator and subagent processes. Writing it here creates a reliable
+#   marker: pre-write.sh Gate 1.5 compares CLAUDE_SESSION_ID against this file to
+#   detect orchestrator context and deny source writes. Fixes the enforcement gap
+#   where the orchestrator could bypass implementer dispatch by writing directly.
+if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    _ORCH_SID_FILE="${CLAUDE_DIR}/.orchestrator-sid"
+    printf '%s\n' "$CLAUDE_SESSION_ID" > "${_ORCH_SID_FILE}.tmp" && mv "${_ORCH_SID_FILE}.tmp" "$_ORCH_SID_FILE"
+fi
+
 # --- Fix 1: Read update status from previous session's check (one-shot display) ---
 # @decision DEC-UPDATE-BG-001
 # @title Background update-check with previous-session result display

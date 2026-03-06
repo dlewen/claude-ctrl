@@ -132,6 +132,7 @@ _PROTECTED_STATE_FILES=(
     "proof-epoch"        # state/{phash}/proof-epoch (no dot prefix)
     "proof.lock"         # state/locks/proof.lock
     "state.lock"         # state/locks/state.lock (no dot prefix)
+    ".orchestrator-sid"  # Dispatch enforcement: orchestrator session marker
 )
 
 # is_protected_state_file FILEPATH

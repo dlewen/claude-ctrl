@@ -43,6 +43,18 @@ When commands produce verbose output (build logs, test results, git diffs):
 
 The orchestrator dispatches to specialized agents — it does NOT write source code directly. See `docs/DISPATCH.md` for full dispatch protocol (routing, gates, interruption handling).
 
+**Dispatch routing (enforced by hooks):**
+
+| Task | Agent | Orchestrator May? |
+|------|-------|--------------------|
+| Planning, architecture | **Planner** | No Write/Edit for source |
+| Implementation, tests | **Implementer** | **No — MUST invoke implementer in a worktree** |
+| E2E verification, demos | **Tester** | No — must invoke tester |
+| Commits, merges, branches | **Guardian** | No git commit/merge/push/branch -d/-D |
+| Worktree creation | Orchestrator | Yes — `git worktree add` before implementer dispatch |
+| Research, reading code | Orchestrator / Explore | Read/Grep/Glob only |
+| Editing `~/.claude/` config | Orchestrator | Trivial edits only (gitignore, 1-line, typos) |
+
 Key rules (always loaded):
 - Use subagent_type=planner (not Plan) — Plan is a generic agent without MASTER_PLAN.md protocol
 - Do NOT use isolation: "worktree" for governance agents — create worktrees explicitly
