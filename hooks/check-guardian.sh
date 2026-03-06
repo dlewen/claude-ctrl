@@ -53,7 +53,12 @@ rm -f "${CLAUDE_DIR}/.agent-progress"
 # subagent-start.sh saves HEAD SHA when Guardian is spawned.
 # We compare here (after Guardian ran) to detect whether a commit occurred.
 # This is more reliable than parsing response text for commit keywords.
-START_SHA_FILE="${CLAUDE_DIR}/.guardian-start-sha"
+_PHASH_CGS=$(project_hash "$PROJECT_ROOT")
+# Check new path first (state/{phash}/guardian-start-sha), fall back to legacy
+START_SHA_FILE="${CLAUDE_DIR}/state/${_PHASH_CGS}/guardian-start-sha"
+if [[ ! -f "$START_SHA_FILE" ]]; then
+    START_SHA_FILE="${CLAUDE_DIR}/.guardian-start-sha"
+fi
 if [[ -f "$START_SHA_FILE" ]]; then
     START_SHA=$(cat "$START_SHA_FILE" 2>/dev/null || echo "")
     CURRENT_SHA=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "")
@@ -64,7 +69,8 @@ if [[ -f "$START_SHA_FILE" ]]; then
             "$PROJECT_ROOT"
         log_info "CHECK-GUARDIAN" "Emitted commit event: sha=${CURRENT_SHA:0:8} msg=$LAST_MSG"
     fi
-    rm -f "$START_SHA_FILE"
+    # Clean both locations
+    rm -f "${CLAUDE_DIR}/state/${_PHASH_CGS}/guardian-start-sha" "${CLAUDE_DIR}/.guardian-start-sha"
 fi
 
 # Extract agent's response text early (needed for summary.md fallback and advisory checks below).

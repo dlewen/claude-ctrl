@@ -46,8 +46,12 @@ state_update() {
     local value="${2:?state_update requires a value}"
     local source="${3:-${_HOOK_NAME:-unknown}}"
     local claude_dir="${CLAUDE_DIR:-$(get_claude_dir 2>/dev/null || echo "$HOME/.claude")}"
-    local state_file="${claude_dir}/state.json"
-    local lockfile="${claude_dir}/.state.lock"
+    local state_dir_base="${claude_dir}/state"
+    mkdir -p "$state_dir_base" 2>/dev/null || true
+    local state_file="${state_dir_base}/state.json"
+    local locks_dir="${state_dir_base}/locks"
+    mkdir -p "$locks_dir" 2>/dev/null || true
+    local lockfile="${locks_dir}/state.lock"
     local timestamp
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -92,7 +96,11 @@ state_update() {
 state_read() {
     local key="${1:?state_read requires a key}"
     local claude_dir="${CLAUDE_DIR:-$(get_claude_dir 2>/dev/null || echo "$HOME/.claude")}"
-    local state_file="${claude_dir}/state.json"
+    local state_file="${claude_dir}/state/state.json"
+    # Migration fallback: check legacy state.json location
+    if [[ ! -f "$state_file" && -f "${claude_dir}/state.json" ]]; then
+        state_file="${claude_dir}/state.json"
+    fi
 
     [[ ! -f "$state_file" ]] && return 1
 

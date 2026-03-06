@@ -223,12 +223,22 @@ is_claude_meta_repo() {
     [[ "${common_dir%/.git}" == */.claude ]]
 }
 
-# Read .test-status and populate TEST_RESULT, TEST_FAILS, TEST_TIME, TEST_AGE globals.
+# Read test-status and populate TEST_RESULT, TEST_FAILS, TEST_TIME, TEST_AGE globals.
+# Checks state/{phash}/test-status first (new path), falls back to .test-status (legacy).
 # Returns 0 on success, 1 if status file doesn't exist.
 # Usage: read_test_status "$PROJECT_ROOT"
 read_test_status() {
     local root="${1:-.}"
-    local status_file="$root/.claude/.test-status"
+    local claude_dir
+    claude_dir=$(PROJECT_ROOT="$root" get_claude_dir 2>/dev/null || echo "$root/.claude")
+    local phash
+    phash=$(project_hash "$root")
+    # New path: state/{phash}/test-status
+    local status_file="${claude_dir}/state/${phash}/test-status"
+    # Migration fallback: legacy .test-status
+    if [[ ! -f "$status_file" ]]; then
+        status_file="${claude_dir}/.test-status"
+    fi
     TEST_RESULT="" TEST_FAILS="" TEST_TIME="" TEST_AGE=""
     [[ -f "$status_file" ]] || return 1
     TEST_RESULT=$(cut -d'|' -f1 < "$status_file")

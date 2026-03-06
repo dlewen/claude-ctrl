@@ -123,7 +123,7 @@ export _HOOK_NAME="test-concurrency"
 state_update ".concurrent.key_a" "value_a" "test-t01" 2>/dev/null || true
 state_update ".concurrent.key_b" "value_b" "test-t01" 2>/dev/null || true
 
-STATE_FILE="$T01_CLAUDE/state.json"
+STATE_FILE="$T01_CLAUDE/state/state.json"
 if [[ -f "$STATE_FILE" ]]; then
     KEY_A=$(jq -r '.concurrent.key_a // empty' "$STATE_FILE" 2>/dev/null || echo "")
     KEY_B=$(jq -r '.concurrent.key_b // empty' "$STATE_FILE" 2>/dev/null || echo "")

@@ -604,9 +604,14 @@ if $_RUN_SUMMARY; then
     fi
 
     # Test status (staleness-guarded)
+    # Check new path (state/{phash}/test-status) first, fall back to legacy .test-status
     TEST_RESULT="unknown"
     TEST_FAILS=0
-    TEST_STATUS_FILE="${CLAUDE_DIR}/.test-status"
+    _PHASH_TS=$(project_hash "$PROJECT_ROOT")
+    TEST_STATUS_FILE="${CLAUDE_DIR}/state/${_PHASH_TS}/test-status"
+    if [[ ! -f "$TEST_STATUS_FILE" ]]; then
+        TEST_STATUS_FILE="${CLAUDE_DIR}/.test-status"
+    fi
 
     # Sleep loop removed (DEC-PERF-003): waiting 0-3.5s per turn for test-runner.sh
     # is unacceptable overhead. If .test-status doesn't exist yet, TEST_RESULT stays
@@ -640,26 +645,15 @@ if $_RUN_SUMMARY; then
     # directly from CLAUDE_DIR (common non-worktree case). Skip the full breadcrumb
     # chain. Falls back to resolve_proof_file() when breadcrumbs are present.
     _PHASH=$(project_hash "$PROJECT_ROOT")
-    _FAST_PROOF="${CLAUDE_DIR}/.proof-status-${_PHASH}"
-    _FAST_DEFAULT="${CLAUDE_DIR}/.proof-status"
-    _HAS_BREADCRUMB=false
-    # Check for any active worktree breadcrumb (session-scoped or project-scoped)
-    if ls "${CLAUDE_DIR}/.active-worktree-path"* 2>/dev/null | head -1 | grep -q .; then
-        _HAS_BREADCRUMB=true
-    fi
-    if ! $_HAS_BREADCRUMB; then
-        # No worktree breadcrumb — direct path is safe
-        if [[ -f "$_FAST_PROOF" ]]; then
-            PROOF_STATUS_FILE="$_FAST_PROOF"
-        elif [[ -f "$_FAST_DEFAULT" ]]; then
-            PROOF_STATUS_FILE="$_FAST_DEFAULT"
-        else
-            PROOF_STATUS_FILE=""
-        fi
+    # New path first (state/{phash}/proof-status), fall back to legacy .proof-status-{phash}
+    _NEW_PROOF="${CLAUDE_DIR}/state/${_PHASH}/proof-status"
+    _OLD_PROOF="${CLAUDE_DIR}/.proof-status-${_PHASH}"
+    if [[ -f "$_NEW_PROOF" ]]; then
+        PROOF_STATUS_FILE="$_NEW_PROOF"
+    elif [[ -f "$_OLD_PROOF" ]]; then
+        PROOF_STATUS_FILE="$_OLD_PROOF"
     else
-        # Worktree scenario — use full breadcrumb resolution
-        PROOF_STATUS_FILE=$(resolve_proof_file)
-        [[ ! -f "$PROOF_STATUS_FILE" ]] && PROOF_STATUS_FILE=""
+        PROOF_STATUS_FILE=""
     fi
     if [[ -n "$PROOF_STATUS_FILE" && -f "$PROOF_STATUS_FILE" ]]; then
         if validate_state_file "$PROOF_STATUS_FILE" 2; then

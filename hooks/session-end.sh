@@ -118,7 +118,12 @@ if [[ -f "$SESSION_EVENT_FILE" && -s "$SESSION_EVENT_FILE" ]]; then
     OUTCOME="unknown"
     PROOF_FILE=$(resolve_proof_file)
     [[ ! -f "$PROOF_FILE" ]] && PROOF_FILE=""
-    TEST_STATUS_FILE="${CLAUDE_DIR}/.test-status"
+    # Check new path (state/{phash}/test-status) first, fall back to legacy
+    _PHASH_SE=$(project_hash "$PROJECT_ROOT")
+    TEST_STATUS_FILE="${CLAUDE_DIR}/state/${_PHASH_SE}/test-status"
+    if [[ ! -f "$TEST_STATUS_FILE" ]]; then
+        TEST_STATUS_FILE="${CLAUDE_DIR}/.test-status"
+    fi
     if [[ -n "$PROOF_FILE" && -f "$PROOF_FILE" ]]; then
         if validate_state_file "$PROOF_FILE" 2; then
             PS_VAL=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null || echo "")
@@ -360,6 +365,7 @@ done
 #   because CI runs complete in minutes. Statusline temp files (.statusline-cache.tmp.*)
 #   are left by interrupted statusline renders and have no utility after session-end.
 rm -f "${CLAUDE_DIR}/.proof-status.lock" "${CLAUDE_DIR}/.state.lock"
+rm -f "${CLAUDE_DIR}/state/locks/proof.lock" "${CLAUDE_DIR}/state/locks/state.lock" 2>/dev/null || true
 
 # CI status files older than 24 hours
 for _ci_file in "${CLAUDE_DIR}/.ci-status-"*; do
@@ -412,6 +418,21 @@ for _proof_file in "${CLAUDE_DIR}/.proof-status-"*; do
         rm -f "$_proof_file"
     fi
 done
+# New format sweep: state/{phash}/proof-status files older than 4 hours
+for _state_proj_dir in "${CLAUDE_DIR}/state/"*/; do
+    [[ -d "$_state_proj_dir" ]] || continue
+    _s_proof="${_state_proj_dir}proof-status"
+    [[ -f "$_s_proof" ]] || continue
+    if [[ "$(uname)" == "Darwin" ]]; then
+        _s_mtime=$(stat -f %m "$_s_proof" 2>/dev/null || echo "0")
+    else
+        _s_mtime=$(stat -c %Y "$_s_proof" 2>/dev/null || echo "0")
+    fi
+    if (( _NOW_EPOCH - _s_mtime > 14400 )); then  # 4 hours
+        rm -f "$_s_proof"
+        rmdir "$_state_proj_dir" 2>/dev/null || true  # Clean empty state dirs
+    fi
+done
 
 # Stale statusline temp files (interrupted renders leave these behind)
 rm -f "${CLAUDE_DIR}/.statusline-cache.tmp."*
@@ -450,6 +471,7 @@ rm -f "${CLAUDE_DIR}/.agent-progress"
 rm -f "${CLAUDE_DIR}/.session-main-tokens"
 rm -f "${CLAUDE_DIR}/.cwd-recovery-needed"
 rm -f "${CLAUDE_DIR}/.proof-epoch"*
+find "${CLAUDE_DIR}/state" -name "proof-epoch" -delete 2>/dev/null || true
 rm -f "${CLAUDE_DIR}/.stop-surface-"*
 rm -f "${CLAUDE_DIR}/.stop-todo-ttl"
 # .stop-backup-ttl intentionally persists (global, once per hour)

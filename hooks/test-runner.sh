@@ -200,11 +200,17 @@ rm -f "${LOCK_DIR}/.test-runner.out"
 date +%s > "$LAST_RUN_FILE"
 
 # --- Write test status for test-gate.sh and guard.sh ---
-TEST_STATUS_FILE="${CLAUDE_DIR}/.test-status"
+# Dual-write: state/{phash}/test-status (new) + .test-status (legacy migration)
+_PHASH_TR=$(project_hash "$PROJECT_ROOT")
+_STATE_TEST="${CLAUDE_DIR}/state/${_PHASH_TR}/test-status"
+_OLD_TEST="${CLAUDE_DIR}/.test-status"
+mkdir -p "${CLAUDE_DIR}/state/${_PHASH_TR}" 2>/dev/null || true
 if [[ "$TEST_EXIT" -ne 0 ]]; then
     FAIL_COUNT=$(echo "$TEST_OUTPUT" | grep -cE '(FAIL|FAILED|ERROR|fail)' || echo "1")
     [[ "$FAIL_COUNT" -eq 0 ]] && FAIL_COUNT=1
-    echo "fail|${FAIL_COUNT}|$(date +%s)" > "$TEST_STATUS_FILE"
+    _test_content="fail|${FAIL_COUNT}|$(date +%s)"
+    printf '%s\n' "$_test_content" > "$_STATE_TEST"
+    printf '%s\n' "$_test_content" > "$_OLD_TEST"
     # Extract top failing assertion for trajectory tracking
     TOP_ASSERTION=$(echo "$TEST_OUTPUT" | grep -oE '(FAIL test_[a-zA-Z_]+|FAILED [a-zA-Z_:]+|AssertionError:? [a-zA-Z_]+|test_[a-zA-Z_]+ FAILED)' | head -1 | sed 's/^FAIL //; s/^FAILED //; s/^AssertionError:? //' || echo "unknown")
     [[ -z "$TOP_ASSERTION" ]] && TOP_ASSERTION="unknown"
@@ -214,7 +220,9 @@ if [[ "$TEST_EXIT" -ne 0 ]]; then
       "{\"result\":\"fail\",\"failures\":${FAIL_COUNT},\"assertion\":\"${TOP_ASSERTION}\"}" \
       "$PROJECT_ROOT"
 else
-    echo "pass|0|$(date +%s)" > "$TEST_STATUS_FILE"
+    _test_content="pass|0|$(date +%s)"
+    printf '%s\n' "$_test_content" > "$_STATE_TEST"
+    printf '%s\n' "$_test_content" > "$_OLD_TEST"
     append_session_event "test_run" \
       "{\"result\":\"pass\",\"failures\":0}" "$PROJECT_ROOT"
 fi

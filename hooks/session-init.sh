@@ -629,51 +629,11 @@ for pattern in "${CLAUDE_DIR}/.session-changes"* "${CLAUDE_DIR}/.session-decisio
 done
 [[ "$STALE_FILE_COUNT" -gt 0 ]] && CONTEXT_PARTS+=("Stale session files: $STALE_FILE_COUNT from previous session")
 
-# --- Stale breadcrumb cleanup ---
-# Clean .active-worktree-path* files from dead sessions on startup.
-# Conditions for cleaning a breadcrumb:
-#   1. Target directory doesn't exist (worktree was deleted)
-#   2. Breadcrumb is empty
-#   3. Breadcrumb file older than 24h
-# Never clean breadcrumbs belonging to the current session (CLAUDE_SESSION_ID).
-# This prevents stale breadcrumbs from resolve_proof_file() resolving to the
-# wrong worktree when a prior session left its breadcrumb behind.
-# See DEC-SESSION-BREADCRUMB-001 in log.sh for context. Issue #98.
-_STALE_BC_COUNT=0
-_CURRENT_SESSION="${CLAUDE_SESSION_ID:-}"
-_NOW_TS=$(date +%s)
-for _bc in "${CLAUDE_DIR}/.active-worktree-path"*; do
-    [[ -f "$_bc" ]] || continue
-    # Skip current session's breadcrumbs (never clean own session)
-    if [[ -n "$_CURRENT_SESSION" && "$_bc" == *"-${_CURRENT_SESSION}-"* ]]; then
-        continue
-    fi
-    _bc_target=$(cat "$_bc" 2>/dev/null | tr -d '[:space:]')
-    # Condition 1: empty breadcrumb
-    if [[ -z "$_bc_target" ]]; then
-        rm -f "$_bc"
-        _STALE_BC_COUNT=$((_STALE_BC_COUNT + 1))
-        continue
-    fi
-    # Condition 2: target directory doesn't exist (deleted worktree)
-    if [[ ! -d "$_bc_target" ]]; then
-        rm -f "$_bc"
-        _STALE_BC_COUNT=$((_STALE_BC_COUNT + 1))
-        continue
-    fi
-    # Condition 3: breadcrumb file older than 24h
-    if [[ "$(uname)" == "Darwin" ]]; then
-        _bc_mtime=$(stat -f %m "$_bc" 2>/dev/null || echo "0")
-    else
-        _bc_mtime=$(stat -c %Y "$_bc" 2>/dev/null || echo "0")
-    fi
-    if [[ $((_NOW_TS - _bc_mtime)) -gt 86400 ]]; then
-        rm -f "$_bc"
-        _STALE_BC_COUNT=$((_STALE_BC_COUNT + 1))
-        continue
-    fi
-done
-[[ "$_STALE_BC_COUNT" -gt 0 ]] && CONTEXT_PARTS+=("Cleaned ${_STALE_BC_COUNT} stale breadcrumb(s)")
+# --- Stale breadcrumb cleanup REMOVED ---
+# The .active-worktree-path breadcrumb system was retired in Phase 2/3.
+# No writers exist for .active-worktree-path* files. After one session cycle,
+# all old breadcrumbs will have been cleaned by the TTL sweep in session-end.sh.
+# W3-3b: Block removed as part of RSM Phase 3 breadcrumb retirement (#78).
 
 # --- Trace count canary: warn if significant drop since last session ---
 # check_trace_count_canary() compares current directory count against the
@@ -752,12 +712,20 @@ if [[ -d "$TRACE_STORE" ]]; then
         ACTIVE_MARKERS=$(ls "$TRACE_STORE"/.active-*-"${_PHASH}" 2>/dev/null | wc -l | tr -d ' \n' || true)
         ACTIVE_MARKERS="${ACTIVE_MARKERS:-0}"
     fi
-    PROOF_FILE="${CLAUDE_DIR}/.proof-status-${_PHASH}"
-    if [[ -f "$PROOF_FILE" ]]; then
+    # Check both new path (state/{phash}/proof-status) and legacy path for stale proof cleanup
+    _NEW_PROOF="${CLAUDE_DIR}/state/${_PHASH}/proof-status"
+    _OLD_PROOF="${CLAUDE_DIR}/.proof-status-${_PHASH}"
+    PROOF_FILE=""
+    if [[ -f "$_NEW_PROOF" ]]; then
+        PROOF_FILE="$_NEW_PROOF"
+    elif [[ -f "$_OLD_PROOF" ]]; then
+        PROOF_FILE="$_OLD_PROOF"
+    fi
+    if [[ -n "$PROOF_FILE" ]]; then
         if [[ "$ACTIVE_MARKERS" -eq 0 ]]; then
             PROOF_VAL=$(cut -d'|' -f1 "$PROOF_FILE" 2>/dev/null || echo "")
-            rm -f "$PROOF_FILE"
-            CONTEXT_PARTS+=("Cleaned stale $(basename "$PROOF_FILE") ($PROOF_VAL) — no active agents for this project, likely from crashed session")
+            rm -f "$_NEW_PROOF" "$_OLD_PROOF"  # Clean both locations
+            CONTEXT_PARTS+=("Cleaned stale proof-status ($PROOF_VAL) — no active agents for this project, likely from crashed session")
         fi
     fi
     # One-time migration: remove legacy unscoped .proof-status if it exists
@@ -881,13 +849,16 @@ rm -f "${CLAUDE_DIR}/.session-start-epoch"
 rm -f "${CLAUDE_DIR}/.subagent-tracker"
 
 # --- Proof-epoch initialization ---
-# Touch .proof-epoch at session start to mark the epoch boundary for lattice resets.
-# write_proof_status() in log.sh compares .proof-epoch mtime against .proof-status mtime:
+# Touch proof-epoch at session start to mark the epoch boundary for lattice resets.
+# write_proof_status() in log.sh compares proof-epoch mtime against proof-status mtime:
 # if epoch is newer, a lattice regression (e.g., verified→pending) is allowed as a
 # clean-session reset. Without this touch, epoch mtime predates any proof-status written
 # in a previous session, and the lattice would reject the reset.
+# Dual-write: state/{phash}/proof-epoch (new) + .proof-epoch (legacy migration).
 # The 2>/dev/null || true suppresses errors if CLAUDE_DIR is read-only (graceful degradation).
-touch "${CLAUDE_DIR}/.proof-epoch" 2>/dev/null || true
+mkdir -p "${CLAUDE_DIR}/state/${_PHASH}" 2>/dev/null || true
+touch "${CLAUDE_DIR}/state/${_PHASH}/proof-epoch" 2>/dev/null || true
+touch "${CLAUDE_DIR}/.proof-epoch" 2>/dev/null || true  # keep during migration
 # Prune orphaned session-scoped tracker files from crashed sessions.
 # Each tracker is named .subagent-tracker-<SESSION_ID_or_PID>.
 # If the PID portion is numeric and the process is dead, the file is stale.
@@ -916,17 +887,26 @@ for tracker_file in "${CLAUDE_DIR}/.subagent-tracker-"*; do
 done
 
 # --- Clear stale test status from previous session ---
-# .test-status is now a hard gate for commits (guard.sh Checks 6/7).
+# test-status is now a hard gate for commits (guard.sh Checks 6/7).
 # Stale passing results from a previous session must not satisfy the gate.
 # test-runner.sh will regenerate it after the first Write/Edit in this session.
-TEST_STATUS="${CLAUDE_DIR}/.test-status"
-if [[ -f "$TEST_STATUS" ]]; then
+# Check new path (state/{phash}/test-status) first, fall back to legacy .test-status.
+_PHASH_TS=$(project_hash "$PROJECT_ROOT")
+_NEW_TEST="${CLAUDE_DIR}/state/${_PHASH_TS}/test-status"
+_OLD_TEST="${CLAUDE_DIR}/.test-status"
+TEST_STATUS=""
+if [[ -f "$_NEW_TEST" ]]; then
+    TEST_STATUS="$_NEW_TEST"
+elif [[ -f "$_OLD_TEST" ]]; then
+    TEST_STATUS="$_OLD_TEST"
+fi
+if [[ -n "$TEST_STATUS" && -f "$TEST_STATUS" ]]; then
     TS_RESULT=$(cut -d'|' -f1 "$TEST_STATUS")
     TS_FAILS=$(cut -d'|' -f2 "$TEST_STATUS")
     if [[ "$TS_RESULT" == "fail" ]]; then
         CONTEXT_PARTS+=("WARNING: Last test run FAILED ($TS_FAILS failures). test-gate.sh will block source writes until tests pass.")
     fi
-    rm -f "$TEST_STATUS"
+    rm -f "$_NEW_TEST" "$_OLD_TEST"  # Clean both locations
 fi
 
 # --- Smoke test: validate library sourcing ---

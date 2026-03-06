@@ -319,7 +319,12 @@ _AV_TRACE_ID=$(detect_active_trace "$PROJECT_ROOT" "tester" 2>/dev/null || echo 
 # This bypasses the marker race entirely — check-tester.sh writes the breadcrumb
 # AFTER finalize_trace deletes the marker, so it's always available.
 if [[ -z "$_AV_TRACE_ID" ]]; then
-    _BREADCRUMB="${CLAUDE_DIR}/.last-tester-trace"
+    # Check new path first (state/{phash}/last-tester-trace), fall back to legacy
+    _PHASH_PTB=$(project_hash "$PROJECT_ROOT")
+    _BREADCRUMB="${CLAUDE_DIR}/state/${_PHASH_PTB}/last-tester-trace"
+    if [[ ! -f "$_BREADCRUMB" ]]; then
+        _BREADCRUMB="${CLAUDE_DIR}/.last-tester-trace"
+    fi
     if [[ -f "$_BREADCRUMB" ]]; then
         _candidate=$(cat "$_BREADCRUMB" 2>/dev/null)
         _cmf="${TRACE_STORE}/${_candidate}/manifest.json"
@@ -327,7 +332,8 @@ if [[ -z "$_AV_TRACE_ID" ]]; then
             _AV_TRACE_ID="$_candidate"
             log_info "POST-TASK" "found tester trace via breadcrumb: $_AV_TRACE_ID"
         fi
-        rm -f "$_BREADCRUMB"  # consume the breadcrumb
+        # Consume both breadcrumb locations
+        rm -f "${CLAUDE_DIR}/state/${_PHASH_PTB}/last-tester-trace" "${CLAUDE_DIR}/.last-tester-trace"
     fi
 fi
 

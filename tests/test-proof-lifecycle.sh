@@ -189,7 +189,7 @@ mkdir -p "$T05_DIR"
         state_update ".test.key" "val$i" "test" 2>/dev/null
     done
 
-    history_count=$(jq '.history | length' "$T05_DIR/state.json" 2>/dev/null || echo "0")
+    history_count=$(jq '.history | length' "$T05_DIR/state/state.json" 2>/dev/null || echo "0")
     if [[ "$history_count" -le 20 ]]; then
         echo "PASS_CAP"
     else
@@ -320,7 +320,7 @@ T10_TRACE=$(mktemp -d)
     write_proof_status "verified" "$T10_REPO" 2>/dev/null
 )
 
-T10_STATE="$T10_REPO/.claude/state.json"
+T10_STATE="$T10_REPO/.claude/state/state.json"
 if [[ -f "$T10_STATE" ]]; then
     T10_VAL=$(jq -r '.proof.status // empty' "$T10_STATE" 2>/dev/null)
     if [[ "$T10_VAL" == "verified" ]]; then

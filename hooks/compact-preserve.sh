@@ -119,7 +119,12 @@ if [[ -n "$SESSION_FILE" && -f "$SESSION_FILE" ]]; then
 fi
 
 # --- Test status ---
-TEST_STATUS="${CLAUDE_DIR}/.test-status"
+# Check new path (state/{phash}/test-status) first, fall back to legacy .test-status
+_PHASH_CP=$(project_hash "$(detect_project_root)")
+TEST_STATUS="${CLAUDE_DIR}/state/${_PHASH_CP}/test-status"
+if [[ ! -f "$TEST_STATUS" ]]; then
+    TEST_STATUS="${CLAUDE_DIR}/.test-status"
+fi
 if [[ -f "$TEST_STATUS" ]]; then
     TS_RESULT=$(cut -d'|' -f1 "$TEST_STATUS")
     TS_FAILS=$(cut -d'|' -f2 "$TEST_STATUS")

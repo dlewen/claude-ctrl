@@ -292,6 +292,10 @@ if [[ "$AUTO_VERIFIED" == "true" ]]; then
         fi
         finalize_trace "$AV_TRACE_ID" "$PROJECT_ROOT" "tester" 2>/dev/null || true
         # Breadcrumb: post-task.sh reads this after finalize_trace deletes the marker
+        # Dual-write: state/{phash}/last-tester-trace (new) + .last-tester-trace (legacy)
+        _PHASH_LTT=$(project_hash "$PROJECT_ROOT")
+        mkdir -p "${CLAUDE_DIR}/state/${_PHASH_LTT}" 2>/dev/null || true
+        echo "${AV_TRACE_ID}" > "${CLAUDE_DIR}/state/${_PHASH_LTT}/last-tester-trace" 2>/dev/null || true
         echo "${AV_TRACE_ID}" > "${CLAUDE_DIR}/.last-tester-trace" 2>/dev/null || true
     fi
 
@@ -463,6 +467,10 @@ COMPLIANCE_TESTER_INIT_EOF
         append_audit "$PROJECT_ROOT" "trace_orphan" "finalize_trace failed for tester trace $TRACE_ID"
     fi
     # Breadcrumb: post-task.sh reads this after finalize_trace deletes the marker
+    # Dual-write: state/{phash}/last-tester-trace (new) + .last-tester-trace (legacy)
+    _PHASH_LTT2=$(project_hash "$PROJECT_ROOT")
+    mkdir -p "${CLAUDE_DIR}/state/${_PHASH_LTT2}" 2>/dev/null || true
+    echo "${TRACE_ID}" > "${CLAUDE_DIR}/state/${_PHASH_LTT2}/last-tester-trace" 2>/dev/null || true
     echo "${TRACE_ID}" > "${CLAUDE_DIR}/.last-tester-trace" 2>/dev/null || true
 fi
 
