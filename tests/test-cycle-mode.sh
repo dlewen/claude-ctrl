@@ -313,7 +313,7 @@ cp "${REAL_CLAUDE_T8}/.test-status" "${REAL_CLAUDE_T8}/.test-status.bak" 2>/dev/
 echo "pass|0|$(date +%s)" > "${REAL_CLAUDE_T8}/.test-status"
 
 # Run post-task.sh
-INPUT_T8=$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"implementer"},"cwd":"%s"}' "$WORKTREE_ROOT")
+INPUT_T8=$(printf '{"tool_name":"Agent","tool_input":{"subagent_type":"implementer"},"cwd":"%s"}' "$WORKTREE_ROOT")
 OUTPUT_T8=$(echo "$INPUT_T8" | \
     env TRACE_STORE="$FAKE_STORE_T8" \
         CLAUDE_SESSION_ID="$SESSION_T8" \
@@ -377,7 +377,7 @@ REAL_CLAUDE_T9="${WORKTREE_ROOT}/.claude"
 cp "${REAL_CLAUDE_T9}/.test-status" "${REAL_CLAUDE_T9}/.test-status.bak9" 2>/dev/null || true
 echo "pass|0|$(date +%s)" > "${REAL_CLAUDE_T9}/.test-status"
 
-INPUT_T9=$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"implementer"},"cwd":"%s"}' "$WORKTREE_ROOT")
+INPUT_T9=$(printf '{"tool_name":"Agent","tool_input":{"subagent_type":"implementer"},"cwd":"%s"}' "$WORKTREE_ROOT")
 OUTPUT_T9=$(echo "$INPUT_T9" | \
     env TRACE_STORE="$FAKE_STORE_T9" \
         CLAUDE_SESSION_ID="$SESSION_T9" \

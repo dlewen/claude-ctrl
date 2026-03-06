@@ -268,7 +268,7 @@ printf 'needs-verification|%s\n' "$(date +%s)" > "$TM05_ENV/.claude/.proof-statu
 
 INPUT_JSON=$(cat <<EOF
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "guardian",
     "prompt": "Merge plan amendment @plan-update — MASTER_PLAN.md changes only, no source files"
@@ -306,7 +306,7 @@ printf 'pending|%s\n' "$(date +%s)" > "$TM06_ENV/.claude/.proof-status-${TM06_PH
 
 INPUT_JSON=$(cat <<EOF
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "guardian",
     "prompt": "Commit documentation changes @no-source"
@@ -345,7 +345,7 @@ printf 'needs-verification|%s\n' "$(date +%s)" > "$TM07_ENV/.claude/.proof-statu
 
 INPUT_JSON=$(cat <<EOF
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "guardian",
     "prompt": "Merge changes — normal guardian dispatch"

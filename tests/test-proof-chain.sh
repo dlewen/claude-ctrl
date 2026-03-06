@@ -216,7 +216,7 @@ run_task_track() {
     fi
 
     local input_json
-    input_json=$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"%s","instructions":"test"}}' \
+    input_json=$(printf '{"tool_name":"Agent","tool_input":{"subagent_type":"%s","instructions":"test"}}' \
         "$agent_type")
 
     local output

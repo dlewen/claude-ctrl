@@ -248,7 +248,7 @@ TT_INPUT_FILE=$(mktemp "$PROJECT_ROOT/tmp/test-tt-input-XXXXXX.json")
 _CLEANUP_DIRS+=("${TT_INPUT_FILE}")
 cat > "$TT_INPUT_FILE" <<'TTEOF'
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "implementer",
     "instructions": "Test implementation"
@@ -286,7 +286,7 @@ git -C "$TEMP_REPO" worktree add "$IMPL_WORKTREE" -b feature/test > /dev/null 2>
 
 cat <<'EOF' | CLAUDE_PROJECT_DIR="$TEMP_REPO" bash "$HOOKS_DIR/task-track.sh" > /dev/null 2>&1
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "implementer",
     "instructions": "Test implementation"
@@ -553,7 +553,7 @@ echo "needs-verification|12345" > "$TEMP_REPO/.claude/.proof-status-${REG_PHASH}
 
 INPUT_JSON=$(cat <<EOF
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "guardian",
     "instructions": "Commit"
@@ -584,7 +584,7 @@ echo "verified|12345" > "$TEMP_REPO/.claude/.proof-status-${REG2_PHASH}"
 
 INPUT_JSON=$(cat <<EOF
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "guardian",
     "instructions": "Commit"
@@ -635,7 +635,7 @@ git -C "$TEMP_I" worktree add "$IMPL_WT" -b feature/i-test > /dev/null 2>&1 || \
 
 cat <<'EOF' | CLAUDE_PROJECT_DIR="$TEMP_I" bash "$HOOKS_DIR/task-track.sh" > /dev/null 2>&1
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "implementer",
     "instructions": "Test implementation"

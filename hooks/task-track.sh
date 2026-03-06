@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# PreToolUse:Task — track subagent spawns for status bar.
+# PreToolUse:Task|Agent — track subagent spawns for status bar.
 #
-# Fires before every Task tool dispatch. Extracts subagent_type
+# Fires before every Agent (formerly Task) tool dispatch. Extracts subagent_type
 # from tool_input and updates .subagent-tracker + .statusline-cache.
 #
 # Gate C activates the proof gate at implementer dispatch by writing
@@ -12,7 +12,7 @@
 # @title Use PreToolUse:Task as SubagentStart replacement
 # @status accepted
 # @rationale SubagentStart hooks don't fire in Claude Code v2.1.38.
-#   PreToolUse:Task demonstrably fires before every Task dispatch.
+#   PreToolUse:Task|Agent demonstrably fires before every Agent dispatch.
 
 set -euo pipefail
 
@@ -349,6 +349,28 @@ if [[ "$AGENT_TYPE" == "implementer" ]]; then
     _OLD_PROOF="${CLAUDE_DIR}/.proof-status-${_PHASH}"
     if [[ ! -f "$_NEW_PROOF" && ! -f "$_OLD_PROOF" ]]; then
         write_proof_status "needs-verification" "$PROJECT_ROOT"
+    fi
+fi
+
+
+# --- Gate D: Plan vs planner advisory ---
+# The system-level "Plan" agent is a generic architect. The custom "planner"
+# agent has the full MASTER_PLAN.md protocol. Warn when Plan is used for
+# planning work where planner should be used.
+if [[ "$AGENT_TYPE" == "Plan" ]]; then
+    _PLAN_PROMPT=$(get_field '.tool_input.prompt' 2>/dev/null || echo "")
+    if echo "$_PLAN_PROMPT" | grep -qiE 'MASTER_PLAN|initiative|architecture|plan.*phase|wave'; then
+        emit_advisory "subagent_type=Plan detected for planning work. Consider subagent_type=planner — it has the full MASTER_PLAN.md protocol (Workflow A/B, /decide, wave decomposition)."
+    fi
+fi
+
+# --- Gate E: isolation: worktree advisory ---
+# The Agent tool's auto-worktree bypasses worktree governance (roster, naming,
+# hook visibility). Governance agents should use explicit worktree creation.
+_ISOLATION=$(get_field '.tool_input.isolation' 2>/dev/null || echo "")
+if [[ -n "$_ISOLATION" && "$_ISOLATION" == "worktree" ]]; then
+    if [[ "$AGENT_TYPE" =~ ^(implementer|planner|guardian|tester)$ ]]; then
+        emit_advisory "isolation: worktree bypasses worktree governance (roster, naming, hooks). Use explicit: git worktree add .worktrees/<name> -b feature/<name>"
     fi
 fi
 

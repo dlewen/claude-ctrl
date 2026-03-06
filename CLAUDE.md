@@ -44,7 +44,10 @@ When commands produce verbose output (build logs, test results, git diffs):
 The orchestrator dispatches to specialized agents — it does NOT write source code directly. See `docs/DISPATCH.md` for full dispatch protocol (routing, auto-flow, gates, interruption handling).
 
 Key rules (always loaded):
-- Implementer: max_turns=85 | Planner: 65 | Tester: 40 | Guardian: 35
+- Turn budgets in dispatch prompt: "Budget: N turns." (Impl 85 | Plan 65 | Test 40 | Guard 35)
+- Use subagent_type=planner (not Plan) — Plan is a generic agent without MASTER_PLAN.md protocol
+- Do NOT use isolation: "worktree" for governance agents — create worktrees explicitly
+- Wave items dispatch in parallel (one implementer per worktree, each with auto-flow cycle)
 - Auto-flow for routine items, phase-boundary for phase-completing work
 - Auto-dispatch tester after implementer returns (no asking)
 - Auto-dispatch guardian when AUTO-VERIFIED appears

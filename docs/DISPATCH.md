@@ -13,6 +13,10 @@
 This file contains the full agent dispatch protocol for the Claude Code meta-infrastructure.
 Referenced from `CLAUDE.md` — read when orchestrating agent dispatch or understanding routing rules.
 
+> **Note:** Claude Code renamed the `Task` tool to `Agent` (circa v2.1.39).
+> Hook matchers use `"Task|Agent"` for compatibility. This document uses
+> "Agent dispatch" to refer to agent invocation via the Agent tool.
+
 ## Agent Dispatch Table
 
 The orchestrator dispatches to specialized agents — it does NOT write source code directly.
@@ -58,6 +62,32 @@ Gate C.1 in task-track.sh requires at least one non-main worktree before impleme
 - Phase-completing work items: dispatch implementer with `CYCLE_MODE: phase-boundary` — orchestrator handles tester + user review + guardian
 - When in doubt, use `phase-boundary` (conservative default)
 
+## Wave Dispatch (Parallel Implementers)
+
+The planner's Phase 3 decomposes work into waves. Items within a wave are
+independent and dispatch in parallel — each gets its own implementer in its
+own worktree, with its own tester→guardian cycle.
+
+**Dispatch pattern:**
+1. Orchestrator creates one worktree per work item:
+   `git worktree add .worktrees/<item-slug> -b feature/<item-slug>`
+2. Dispatch one implementer per worktree with `CYCLE_MODE: auto-flow`
+3. Each implementer runs its full cycle internally (implement→test→verify→commit)
+4. Use `run_in_background: true` for concurrent dispatch
+
+**Why auto-flow is mandatory for parallel dispatch:** Proof-status is scoped
+per-project (`project_hash`), not per-worktree. If parallel implementers
+used phase-boundary mode, their proof gates would collide — Implementer A's
+tester writing `verified` would let Implementer B's guardian merge untested
+code. Auto-flow avoids this because the proof lifecycle is self-contained
+within each implementer's sub-agent cycle.
+
+**Constraints:**
+- Bootstrap remains sequential (plan must exist before implementation)
+- Wave N cannot dispatch until Wave N-1 completes (dependency order)
+- The "never dispatch a second implementer" in Task Interruption applies to
+  UNPLANNED interruptions, not planned wave dispatch
+
 **Auto-dispatch to Guardian:** When work is ready for commit, invoke Guardian directly with full context (files, issue numbers, push intent). Do NOT ask "should I commit?" before dispatching. Do NOT ask "want me to push?" after Guardian returns. Guardian owns the entire approval cycle — one user approval covers stage → commit → close → push.
 
 **Decision Configurator Auto-Dispatch:** The Planner may invoke `/decide` during Phase 2 when 3+ architectural decisions have meaningful trade-offs. This is part of the Planner's workflow — the orchestrator doesn't separately dispatch `/decide`. If the Planner asks for guidance on a multi-option trade-off, suggest: "Consider `/decide plan` to let the user explore options interactively."
@@ -96,7 +126,7 @@ AUTO-VERIFY-APPROVED`. This is functionally equivalent to the auto-verify path a
 ## Pre-Dispatch Gates (Mechanically Enforced)
 
 - Tester dispatch: requires implementer to have returned with tests passing
-- Guardian dispatch: requires `.proof-status = verified` when file exists (PreToolUse:Task gate in task-track.sh). Missing file = no gate (bootstrap path — implementer dispatch activates the gate by writing `needs-verification`)
+- Guardian dispatch: requires `.proof-status = verified` when file exists (PreToolUse:Task|Agent gate in task-track.sh). Missing file = no gate (bootstrap path — implementer dispatch activates the gate by writing `needs-verification`)
 - The user's approval (verified, approved, lgtm, looks good, ship it) triggers `.proof-status = verified` via prompt-submit.sh — no agent can write it
 
 ## Trace and Recovery Protocols
@@ -113,11 +143,14 @@ without prompting. When the task touches unfamiliar areas, read relevant files f
 
 ## Turn Budgets and Dispatch Sizing
 
-**max_turns enforcement:** Every Task invocation MUST include max_turns.
-- Implementer: max_turns=85
-- Planner: max_turns=65
-- Tester: max_turns=40
-- Guardian: max_turns=35
+**Turn budget enforcement:** The Agent tool has no `max_turns` parameter.
+Include the budget in the dispatch prompt text:
+"Budget: N turns. Scope: [work items, file count]."
+Agents self-regulate via their instruction files.
+- Implementer: 85 turns
+- Planner: 65 turns
+- Tester: 40 turns
+- Guardian: 35 turns
 
 Sub-agents dispatched from within an auto-flow implementer get their own budgets (tester: 40, guardian: 30). These do not consume the implementer's 85-turn budget.
 
@@ -139,7 +172,7 @@ When you receive a new task while agents from a previous dispatch are still runn
 |--------|------|--------------|
 | **Pivot** | Unrelated tasks (default) | Create `/backlog` issue with interrupted context (trace summary, branch, what remains), then proceed with new task. Non-optional — interrupted work MUST be captured. |
 | **Queue** | Old task near completion | Finish old task first, then start new |
-| **Parallel** | Old agent in final stage (tester/guardian) | Let old finish in background, start read-only exploration of new task. Never dispatch a second implementer. |
+| **Parallel** | Old agent in final stage (tester/guardian) | Let old finish in background, start read-only exploration of new task. Never dispatch a second unplanned implementer. Planned wave dispatch is allowed (see Wave Dispatch). |
 | **Merge** | Tasks overlap | Incorporate new requirements when current agent returns |
 
 Two exceptions bypass AskUserQuestion:

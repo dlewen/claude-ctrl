@@ -970,6 +970,18 @@ if [[ "$CI_TIER2_NEEDED" == "true" ]] && [[ -n "${_PID_CI:-}" ]]; then
     fi
 fi
 
+# --- Tool-name canary: warn if settings.json matchers may be stale ---
+# Claude Code has renamed tools before (Task→Agent). If it renames again,
+# hooks will silently stop matching. This check reads settings.json matchers
+# and warns if neither "Task" nor "Agent" appears in PreToolUse matchers.
+_SETTINGS="$HOME/.claude/settings.json"
+if [[ -f "$_SETTINGS" ]]; then
+    _PRE_MATCHER=$(jq -r '.hooks.PreToolUse[]? | select(.hooks[]?.command | test("task-track")) | .matcher // ""' "$_SETTINGS" 2>/dev/null)
+    if [[ -n "$_PRE_MATCHER" ]] && ! echo "$_PRE_MATCHER" | grep -qE 'Agent|Task'; then
+        CONTEXT_PARTS+=("WARNING: PreToolUse matcher '$_PRE_MATCHER' may not match current agent dispatch tool. All dispatch gates may be silently disabled.")
+    fi
+fi
+
 # --- Preflight integrity checks ---
 # Fast validation of libraries, state files, and hook registration.
 # diagnose.sh --quick completes in <250ms. Failures inject warnings;

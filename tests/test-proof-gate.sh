@@ -97,7 +97,7 @@ run_task_track() {
     local INPUT_JSON
     INPUT_JSON=$(cat <<EOF
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "$agent_type",
     "instructions": "Test task"
@@ -177,7 +177,7 @@ git -C "$TEMP_REPO" worktree add "$IMPL_WORKTREE" -b feature/test > /dev/null 2>
 
 INPUT_JSON=$(cat <<'EOF'
 {
-  "tool_name": "Task",
+  "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "implementer",
     "instructions": "Test implementation"

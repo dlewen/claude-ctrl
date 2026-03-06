@@ -130,7 +130,7 @@ run_task_track_guardian() {
     fi
 
     local input_json
-    input_json=$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"guardian","instructions":"Test guardian dispatch"}}')
+    input_json=$(printf '{"tool_name":"Agent","tool_input":{"subagent_type":"guardian","instructions":"Test guardian dispatch"}}')
 
     ( export CLAUDE_PROJECT_DIR="$repo"
       export TRACE_STORE="$trace_store"
@@ -156,7 +156,7 @@ run_task_track_agent() {
     fi
 
     local input_json
-    input_json=$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"%s","instructions":"Test dispatch"}}' "$agent_type")
+    input_json=$(printf '{"tool_name":"Agent","tool_input":{"subagent_type":"%s","instructions":"Test dispatch"}}' "$agent_type")
 
     ( export CLAUDE_PROJECT_DIR="$repo"
       export TRACE_STORE="$trace_store"
