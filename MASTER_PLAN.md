@@ -6,7 +6,7 @@
 **Languages:** Bash (85%), Markdown (10%), Python (3%), JSON (2%)
 **Root:** /Users/turla/.claude
 **Created:** 2026-03-01
-**Last updated:** 2026-03-05 (RSM Phase 2 completed, production-reliability phases updated)
+**Last updated:** 2026-03-05 (Operational Mode System initiative added)
 
 The Claude Code configuration directory. It shapes how Claude Code operates across all projects via hooks, agents, skills, and instructions. Managed as a git repository (juanandresgs/claude-config-pro). The hook system enforces governance (git safety, documentation, proof gates, worktree discipline) while the agent system dispatches specialized roles (planner, implementer, tester, guardian) for all project work.
 
@@ -89,6 +89,15 @@ The Claude Code configuration directory. It shapes how Claude Code operates acro
 | 2026-03-04 | DEC-PROD-004 | production-reliability | SESSION_ID-based TTL sentinel scoping | PID reuse causes false matches; SESSION_ID is unique per session |
 | 2026-03-04 | DEC-PROD-005 | production-reliability | Non-blocking macOS CI matrix job | macOS is primary dev platform but CI is Ubuntu-only; continue-on-error initially |
 | 2026-03-05 | DEC-RSM-BOOTSTRAP-001 | robust-state-mgmt | Bootstrap paradox: document self-hosting gate risk | When gate infrastructure itself is broken, the gate blocks the fix; manual override required (#105) |
+| 2026-03-05 | DEC-MODE-TAXONOMY-001 | operational-mode-system | 4-tier mode taxonomy: Observe/Amend/Patch/Build | Maps to 4 distinct risk profiles; monotonic escalation lattice validated by deep research |
+| 2026-03-05 | DEC-MODE-STATE-001 | operational-mode-system | .op-mode state file with monotonic write_op_mode() | Pipe-delimited format; registered in _PROTECTED_STATE_FILES; atomic_write() for crash safety |
+| 2026-03-05 | DEC-MODE-CLASSIFY-001 | operational-mode-system | Deterministic classifier in prompt-submit.sh | prompt-submit.sh already has keyword detection; conservative fallback to Mode 4 on ambiguity |
+| 2026-03-05 | DEC-MODE-CONTRACT-001 | operational-mode-system | Component contract matrix enforced at hook level | Each hook reads .op-mode and conditionally engages gates per contract matrix |
+| 2026-03-05 | DEC-MODE-ESCALATE-001 | operational-mode-system | One-way escalation engine with trigger rules | Irreversible within session; is_source_file() authoritative; audit trail for every escalation |
+| 2026-03-05 | DEC-MODE-SAFETY-001 | operational-mode-system | 9 cross-mode safety invariants, never mode-conditional | Layer 1 enforcement (guard.sh) fires unconditionally; agent exploitation of lightweight paths documented |
+| 2026-03-05 | DEC-MODE-PERSIST-001 | operational-mode-system | Re-classify mode after compaction with Previous Mode hint | Fresh classification safer than stale state; monotonic lattice prevents downgrade |
+| 2026-03-05 | DEC-MODE-BRANCH-001 | operational-mode-system | Mode 2 relaxes branch-guard for non-source files | Guardian approval is sufficient; no protected-non-source list needed |
+| 2026-03-05 | DEC-MODE-PLAN-001 | operational-mode-system | Mode 3 plan-check skip via .op-mode hook-level read | Skips MASTER_PLAN.md required but enforces staleness if plan exists |
 
 ---
 
@@ -1018,6 +1027,354 @@ Note: Phase 1 and Phase 2 can run in parallel (no dependencies). Phase 3 is a qu
 - `hooks/task-track.sh` — TTL sentinel scoping target
 - `.session-events.jsonl` — unbounded growth state file
 - `.hook-timing.log` — unbounded growth state file
+
+### Initiative: Operational Mode System
+**Status:** active
+**Started:** 2026-03-05
+**Goal:** Introduce proportional governance by classifying work into 4 operational modes (Observe/Amend/Patch/Build) so that lightweight tasks skip heavyweight infrastructure while maintaining all safety invariants.
+
+> The Claude Code deterministic harnessing framework enforces a single operational envelope (full Planner-Implementer-Tester-Guardian pipeline with worktrees) for ALL work. This creates 3-10x overhead for 60-70% of sessions that are NOT feature development -- research, config edits, backlog management, small fixes. The system already has ad-hoc exemptions (is_claude_meta_repo(), DISPATCH.md trivial-edit rules) proving one-size governance doesn't fit all work. This initiative replaces ad-hoc bypasses with a principled mode taxonomy enforced at the hook level, with monotonic escalation ensuring tasks can only become MORE governed, never less.
+
+**Dominant Constraint:** reliability -- modes must never cause false allows (permitting unauthorized state changes or bypassing safety invariants). Conservative default to Mode 4 when classification is ambiguous.
+
+#### Goals
+- REQ-GOAL-001: Proportional governance -- overhead ratio < 0.5 for Mode 1-2 tasks vs current full-pipeline overhead
+- REQ-GOAL-002: Transparent classification -- mode visible in statusline, transitions logged in audit trail
+- REQ-GOAL-003: Safety confidence -- zero safety-invariant violations across all modes
+- REQ-GOAL-004: Reduced token cost -- 40% reduction for non-feature sessions via skipped heavyweight components
+- REQ-GOAL-005: Faster adoption -- first-session success rate improvement by removing friction for simple tasks
+
+#### Non-Goals
+- REQ-NOGO-001: User-selectable mode switching -- auto-classify only; user override is escape hatch not primary interface
+- REQ-NOGO-002: Per-project mode configuration -- universal classification rules; project-specific overrides are P2
+- REQ-NOGO-003: Reducing hook execution for Mode 4 (Build) -- unchanged heavyweight path; modes only lighten lower tiers
+- REQ-NOGO-004: Automatic mode downgrade -- escalation only, never de-escalation within a session
+- REQ-NOGO-005: Replacing the agent system -- modes augment dispatch routing, not replace Planner/Implementer/Tester/Guardian
+
+#### Requirements
+
+**Must-Have (P0)**
+
+- REQ-P0-001: Mode taxonomy defined -- 4 discrete modes with clear boundaries, triggers, risk profiles, and escalation rules
+  Acceptance: Given the mode taxonomy document, When a developer reads it, Then each mode has a one-line description, example triggers, risk profile, component contract, and boundary rules for escalation
+- REQ-P0-002: Dispatch auto-selects mode -- classification heuristics in prompt-submit.sh with conservative fallback
+  Acceptance: Given a user prompt "update the README", When prompt-submit.sh classifies it, Then .op-mode contains "2" (Amend); Given an ambiguous prompt, When classification fails, Then .op-mode defaults to "4" (Build)
+- REQ-P0-003: Component contracts specified -- each mode defines which components engage (worktree, tester, guardian, hooks, approval gates)
+  Acceptance: Given Mode 1 (Observe), When an agent runs, Then no worktree created, no tester dispatched, no guardian needed, branch-guard skipped; Given Mode 4 (Build), When an agent runs, Then full pipeline engaged (identical to current behavior)
+- REQ-P0-004: Monotonic escalation -- mode can only increase during a session, never decrease
+  Acceptance: Given .op-mode = 2 (Amend), When is_source_file() detects a source write, Then .op-mode escalates to 3 (Patch) or 4 (Build); Given .op-mode = 3, When write_op_mode(2) is called, Then the write is rejected
+- REQ-P0-005: Cross-mode safety invariants -- 9 invariants that hold regardless of mode (nuclear deny, /tmp redirect, force-push protection, etc.)
+  Acceptance: Given Mode 1 (Observe), When an agent attempts `rm -rf /`, Then guard.sh denies it (identical behavior to Mode 4)
+- REQ-P0-006: Mode state persisted in .op-mode file -- registered in protected state file registry, atomic writes
+  Acceptance: Given .op-mode is written, When pre-write.sh Gate 0 checks it, Then direct Write/Edit tool access is denied; Given concurrent write_op_mode() calls, Then atomic_write() prevents corruption
+
+**Nice-to-Have (P1)**
+
+- REQ-P1-001: Statusline mode display -- current mode shown as compact indicator (e.g., `M1:observe`)
+  Criterion: statusline.sh reads .op-mode and renders mode indicator in Line 1
+- REQ-P1-002: Mode-aware turn budgets -- lighter modes get smaller max_turns allocation
+  Criterion: DISPATCH.md turn budget tables conditioned on mode; Mode 1 max_turns=15, Mode 2 max_turns=25
+- REQ-P1-003: Mode-aware session summary -- stop.sh skips heavyweight surface logic in Mode 1-2
+  Criterion: stop.sh reads .op-mode; Modes 1-2 skip @decision drift scan and plan-drift computation
+- REQ-P1-004: Classification fast-path -- prompt-submit.sh short-circuits non-matching modes in <5ms
+  Criterion: Mode 1/2 classification adds <5ms to prompt-submit.sh execution time
+
+**Future Consideration (P2)**
+
+- REQ-P2-001: Per-project mode overrides via .claude/modes.json
+- REQ-P2-002: Mode analytics -- which modes are used most, escalation frequency, false classification rate
+- REQ-P2-003: Mode-aware cost estimation -- predict session cost based on mode selection
+- REQ-P2-004: LLM-assisted classification for ambiguous prompts (beyond keyword heuristics)
+
+#### Definition of Done
+
+All P0 requirements (001-006) satisfied. 4-tier mode taxonomy documented in docs/MODES.md. Classifier in prompt-submit.sh writes .op-mode. All 4 hooks (pre-write.sh, pre-bash.sh, prompt-submit.sh, stop.sh) read .op-mode and conditionally engage gates. Monotonic escalation enforced. 9 safety invariants verified as mode-independent. .op-mode registered in _PROTECTED_STATE_FILES. Existing test suite passes with no regressions. New mode-specific tests for classification, escalation, and hook integration.
+
+#### Architectural Decisions
+
+- DEC-MODE-TAXONOMY-001: 4-tier mode taxonomy (Observe/Amend/Patch/Build) with monotonic escalation
+  Addresses: REQ-P0-001.
+  Rationale: Maps to 4 distinct risk profiles. Mode 1 (Observe): read-only, no writes, no commits. Mode 2 (Amend): non-source writes (docs, config), guardian approval, no worktree. Mode 3 (Patch): source writes, testing required, optional worktree for <3 files. Mode 4 (Build): full pipeline (current behavior). Validated by deep research: monotonic escalation lattice is industry standard in safety-critical systems.
+
+- DEC-MODE-STATE-001: .op-mode state file with monotonic write_op_mode() in state-lib.sh
+  Addresses: REQ-P0-006.
+  Rationale: Pipe-delimited format (mode|confidence|timestamp|reason) enables both hook reads and audit. Monotonic enforcement via ordinal comparison in write_op_mode(). Registered in _PROTECTED_STATE_FILES to close Write-tool loophole. atomic_write() for crash safety. Same proven pattern as .proof-status.
+
+- DEC-MODE-CLASSIFY-001: Deterministic classifier in prompt-submit.sh with keyword heuristics
+  Addresses: REQ-P0-002.
+  Rationale: prompt-submit.sh already runs on every user prompt and has keyword detection (grep -qiE for deferral language). Adding mode classification here is zero-additional-hook-cost. Conservative fallback to Mode 4 on ambiguity prevents false allows. Classification signals: file types mentioned, action verbs (read/review vs edit/fix vs build/implement), scope indicators.
+
+- DEC-MODE-CONTRACT-001: Component contract matrix enforced at hook level via .op-mode reads
+  Addresses: REQ-P0-003.
+  Rationale: Each hook reads .op-mode at entry and conditionally engages gates per the contract matrix. Mode 1: skip branch-guard, plan-check, test-gate, doc-gate. Mode 2: skip branch-guard for non-source, skip plan-check, skip test-gate. Mode 3: skip plan-check (unless plan exists), engage all others. Mode 4: unchanged. Assume-guarantee reasoning: each mode's skipped checks are valid ONLY because the mode's assumptions guarantee those checks are unnecessary.
+
+- DEC-MODE-ESCALATE-001: One-way escalation engine with 10 trigger rules across 4 hooks
+  Addresses: REQ-P0-004.
+  Rationale: Escalation is irreversible within a session. Triggers: is_source_file() write -> escalate to Mode 3+, worktree creation -> escalate to Mode 4, git commit -> escalate to Mode 2+, multiple file edits -> escalate to Mode 3+. Anti-gaming: is_source_file() is authoritative (extension-based, not model judgment), classification failure defaults to Mode 4, audit trail for every escalation in .audit-log.
+
+- DEC-MODE-SAFETY-001: 9 cross-mode safety invariants, never mode-conditional
+  Addresses: REQ-P0-005.
+  Rationale: Layer 1 enforcement (guard.sh) fires unconditionally across all modes. Invariants: (1) nuclear deny (rm -rf /, dd), (2) /tmp redirect, (3) force-push protection, (4) destructive git protection, (5) cd-into-worktree deny, (6) env modification deny, (7) hook bypass deny (--no-verify), (8) credential file protection, (9) sandbox enforcement. Deep research validates: agent exploitation of lightweight paths is documented; invariants must be mode-independent.
+
+- DEC-MODE-PERSIST-001: Re-classify mode after compaction with Previous Mode hint
+  Addresses: REQ-P0-002, REQ-P0-006.
+  Rationale: Monotonic lattice prevents downgrade, but fresh classification after compaction is safer than carrying stale state. compact-preserve.sh includes "Previous Mode: N" hint that biases the classifier. If re-classification yields a lower mode, the lattice enforces the higher previous mode.
+
+- DEC-MODE-BRANCH-001: Mode 2 relaxes branch-guard for all non-source files; Guardian is sufficient
+  Addresses: REQ-P0-003.
+  Rationale: Branch-guard's purpose is preventing accidental source writes, not gating all writes. Guardian approval sees the full diff. Adding a "protected non-source" list creates maintenance burden for marginal safety gain. settings.json is already protected by _PROTECTED_STATE_FILES registry if needed.
+
+- DEC-MODE-PLAN-001: Mode 3 plan-check skip via .op-mode hook-level read
+  Addresses: REQ-P0-003.
+  Rationale: Plan-check reads .op-mode; if Mode 3, it skips "MASTER_PLAN.md required" deny but still enforces staleness advisory if plan exists. All mode state flows through .op-mode file, keeping the check mechanism consistent with other mode-aware gates.
+
+#### Waves
+
+##### Initiative Summary
+- **Total items:** 15
+- **Critical path:** 5 waves (W1 -> W2 -> W3 -> W4 -> W5)
+- **Max width:** 4 (Wave 3)
+- **Gates:** 2 review (W1, W5), 3 approve (W2, W3, W4)
+
+##### Wave 1: Foundation (no dependencies)
+**Issues:** #114
+**Parallel dispatches:** 1 (tightly coupled)
+
+**W1-1: Mode taxonomy document -- docs/MODES.md** -- Weight: M, Gate: review
+- Create `docs/MODES.md` with 4-mode taxonomy: Mode 1 (Observe), Mode 2 (Amend), Mode 3 (Patch), Mode 4 (Build)
+- Each mode: one-line description, example triggers, risk profile, component contract table, escalation triggers
+- Component contract matrix: rows = modes, columns = worktree/tester/guardian/branch-guard/plan-check/test-gate/doc-gate
+- Escalation boundary rules: what promotes each mode to the next
+- **Integration:** Referenced by CLAUDE.md (add to Resources table), DISPATCH.md (mode-aware routing), and all hooks that read .op-mode
+
+**W1-2: .op-mode state file infrastructure** -- Weight: M, Gate: review
+- Add `write_op_mode()` to `hooks/state-lib.sh`: validates mode 1-4, enforces monotonic (ordinal comparison), atomic_write()
+- Add `read_op_mode()` to `hooks/state-lib.sh`: returns current mode or default "4" if .op-mode missing
+- Format: `mode|confidence|timestamp|reason` (e.g., `2|high|2026-03-05T19:00:00|prompt-classify:docs-only`)
+- Register `.op-mode` in `_PROTECTED_STATE_FILES` array in `hooks/core-lib.sh`
+- Add `require_mode` to `hooks/source-lib.sh` for lazy loading of mode functions
+- **Integration:** `hooks/core-lib.sh` _PROTECTED_STATE_FILES array, `hooks/source-lib.sh` require_mode(), `hooks/state-lib.sh` new functions
+
+**W1-3: Cross-mode safety invariants documentation** -- Weight: S, Gate: review
+- Document the 9 safety invariants in `docs/MODES.md` with explicit "these NEVER change based on mode"
+- Cross-reference each invariant to its enforcement point (guard.sh line numbers)
+- Verify each invariant is already mode-independent in current code (should be -- guard.sh has no mode awareness today)
+- **Integration:** `docs/MODES.md` safety invariants section
+
+**W1-4: Foundation tests** -- Weight: M, Gate: review
+- Test: write_op_mode() accepts modes 1-4, rejects 0, 5, "invalid"
+- Test: write_op_mode() enforces monotonic (2 -> 3 ok, 3 -> 2 denied)
+- Test: read_op_mode() returns 4 when .op-mode missing (conservative default)
+- Test: .op-mode is in _PROTECTED_STATE_FILES registry
+- Test: atomic_write() produces valid pipe-delimited format
+- **Integration:** `tests/run-hooks.sh` or new `tests/test-op-mode.sh`
+
+##### Dispatch Plan
+- Dispatch 1: W1-1, W1-2, W1-3, W1-4 (tightly coupled -- taxonomy + state + invariants + tests)
+
+##### Wave 2: Classification (depends on Wave 1)
+**Issues:** #115
+**Parallel dispatches:** 1 (tightly coupled)
+**Blocked by:** Wave 1 (#114) -- needs write_op_mode/read_op_mode
+
+**W2-1: Mode classifier in prompt-submit.sh** -- Weight: L, Gate: approve, Deps: W1-2
+- Add classification function `classify_op_mode()` to prompt-submit.sh (or a new mode-lib.sh)
+- Keyword heuristics for each mode:
+  - Mode 1 signals: "read", "review", "explain", "show", "list", "what is", "how does", "research", "analyze"
+  - Mode 2 signals: "update README", "edit config", "fix typo", "documentation", "settings", "CLAUDE.md"
+  - Mode 3 signals: "fix bug", "small change", "patch", "quick fix", "one-liner", combined with file-type detection
+  - Mode 4 signals: "implement", "build", "feature", "refactor", "new file", "initiative", "plan"
+- Conservative: ambiguous -> Mode 4. Multi-signal conflict -> higher mode wins.
+- Write result via write_op_mode() on first prompt of session
+- Subsequent prompts: re-classify but lattice prevents downgrade
+- **Integration:** `hooks/prompt-submit.sh` main flow, calls write_op_mode() from state-lib.sh
+
+**W2-2: Compaction persistence** -- Weight: S, Gate: approve, Deps: W1-2
+- Modify `commands/compact.md` (or context-preservation skill) to include "Previous Mode: N" in preserved context
+- After compaction, prompt-submit.sh re-classifies with bias: if re-classification < previous mode, use previous
+- **Integration:** `commands/compact.md` or `skills/context-preservation/`, `hooks/prompt-submit.sh`
+
+**W2-3: Classification tests** -- Weight: M, Gate: approve, Deps: W2-1
+- Test: "explain how hooks work" -> Mode 1
+- Test: "update the README" -> Mode 2
+- Test: "fix the typo in line 5 of statusline.sh" -> Mode 3 (source file detected)
+- Test: "implement the new feature from issue #42" -> Mode 4
+- Test: ambiguous prompt -> Mode 4 (conservative)
+- Test: re-classification respects monotonic lattice
+- Test: compaction preserves mode hint
+- **Integration:** `tests/test-op-mode.sh` or `tests/test-mode-classify.sh`
+
+##### Dispatch Plan
+- Dispatch 1: W2-1, W2-2, W2-3 (classifier + persistence + tests)
+
+##### Wave 3: Hook Integration (depends on Waves 1+2)
+**Issues:** #116
+**Parallel dispatches:** 2 (hook changes + dispatch gating can parallelize)
+**Blocked by:** Wave 2 (#115) -- needs classifier writing .op-mode
+
+**W3-1: pre-write.sh mode-aware gates** -- Weight: L, Gate: approve, Deps: W2-1
+- Read .op-mode at entry (via read_op_mode())
+- Mode 1 (Observe): deny ALL writes (not just source) with message "Mode 1 (Observe) does not allow writes. Escalate to Mode 2+ first."
+- Mode 2 (Amend): skip branch-guard for non-source files (is_source_file() returns false), keep Gate 0 (protected state files), skip plan-check, skip test-gate
+- Mode 3 (Patch): skip plan-check (unless plan exists and is stale), engage branch-guard, test-gate, doc-gate as normal
+- Mode 4 (Build): unchanged (current behavior)
+- **Integration:** `hooks/pre-write.sh` gates 1-5, read_op_mode() from state-lib.sh
+
+**W3-2: pre-bash.sh mode-aware behavior** -- Weight: M, Gate: approve, Deps: W2-1
+- Read .op-mode at entry
+- Mode 1: if command has write intent (mkdir, touch, >, >>, tee, mv, cp), escalate to Mode 2 via write_op_mode() and inject advisory
+- Mode 2: if command creates/modifies source files, escalate to Mode 3+
+- Mode 3-4: unchanged
+- **Integration:** `hooks/pre-bash.sh` main flow, write_op_mode() from state-lib.sh
+
+**W3-3: Dispatch mode validation** -- Weight: M, Gate: approve, Deps: W2-1
+- Add mode check to `docs/DISPATCH.md` routing rules
+- Mode 1: only Planner agent allowed (no Implementer, no Tester, no Guardian)
+- Mode 2: Guardian allowed (for commits), no Implementer (no source writes), no Tester (no source to test)
+- Mode 3: all agents allowed, worktree optional for <3 source files
+- Mode 4: all agents required, worktree mandatory
+- Enforcement: task-track.sh validates mode before agent dispatch
+- **Integration:** `docs/DISPATCH.md` routing table, `hooks/task-track.sh` dispatch validation
+
+**W3-4: Hook integration tests** -- Weight: L, Gate: approve, Deps: W3-1, W3-2, W3-3
+- Matrix tests: 4 modes x key operations (write source, write docs, bash command, agent dispatch)
+- Mode 1 + write source -> denied
+- Mode 1 + write docs -> denied
+- Mode 2 + write source -> escalation to Mode 3+
+- Mode 2 + write docs -> allowed, branch-guard skipped
+- Mode 3 + write source -> allowed, branch-guard engaged
+- Mode 4 + write source -> allowed (current behavior unchanged)
+- Verify: all 9 safety invariants active in Mode 1 (guard.sh tests)
+- **Integration:** `tests/test-op-mode-hooks.sh` (new test file)
+
+##### Dispatch Plan
+- Dispatch 1: W3-1, W3-2, W3-3 (hook modifications -- can be batched, 3 files)
+- Dispatch 2: W3-4 (integration tests -- depends on all hook changes)
+
+##### Wave 4: Escalation Engine (depends on Waves 1+2+3)
+**Issues:** #117
+**Parallel dispatches:** 1 (tightly coupled)
+**Blocked by:** Wave 3 (#116) -- needs mode-aware hooks in place
+
+**W4-1: Escalation triggers across hooks** -- Weight: L, Gate: approve, Deps: W3-1, W3-2
+- Consolidate escalation logic into `escalate_mode()` function in state-lib.sh
+- escalate_mode(target_mode, reason): validates target > current, writes .op-mode, logs to .audit-log
+- Trigger rules (10 total):
+  1. is_source_file() write in pre-write.sh -> Mode 3+
+  2. Worktree creation (EnterWorktree tool) -> Mode 4
+  3. Git commit command in pre-bash.sh -> Mode 2+
+  4. Multiple source file edits (>2 files) -> Mode 4
+  5. Agent dispatch (Implementer) -> Mode 4
+  6. Agent dispatch (Tester) -> Mode 3+
+  7. Agent dispatch (Guardian) -> Mode 2+
+  8. Plan creation/amendment -> Mode 4
+  9. Test execution -> Mode 3+
+  10. Force push attempt -> Mode 4
+- **Integration:** `hooks/state-lib.sh` escalate_mode(), `hooks/pre-write.sh`, `hooks/pre-bash.sh`, `hooks/prompt-submit.sh`, `hooks/task-track.sh`
+
+**W4-2: Monotonic lattice enforcement + anti-gaming** -- Weight: M, Gate: approve, Deps: W4-1
+- write_op_mode() rejects downward transitions (already in W1-2, but harden)
+- Anti-gaming measures:
+  - is_source_file() is authoritative (extension check, not model judgment)
+  - No "suggest mode" interface for the model -- classification is hook-only
+  - .op-mode in _PROTECTED_STATE_FILES -- model cannot directly write it
+  - Audit every escalation with timestamp, trigger, previous mode, new mode
+- **Integration:** `hooks/state-lib.sh` write_op_mode() hardening
+
+**W4-3: Escalation audit logging** -- Weight: S, Gate: approve, Deps: W4-1
+- Every escalation appends to `.audit-log`: `[timestamp] MODE_ESCALATION: mode_from -> mode_to | trigger: reason | file: path`
+- Format compatible with existing .audit-log entries (stop.sh already writes to it)
+- **Integration:** `.audit-log` (existing file), `hooks/state-lib.sh` escalate_mode()
+
+**W4-4: Escalation path tests** -- Weight: M, Gate: approve, Deps: W4-1, W4-2
+- Test: source write escalates Mode 1 -> Mode 3
+- Test: worktree creation escalates Mode 2 -> Mode 4
+- Test: git commit escalates Mode 1 -> Mode 2
+- Test: downgrade attempt rejected (Mode 3 -> Mode 2)
+- Test: anti-gaming -- Write tool to .op-mode denied by Gate 0
+- Test: audit log entries present after escalation
+- Test: multiple escalations in one session produce correct final mode
+- **Integration:** `tests/test-op-mode-escalation.sh` (new test file)
+
+##### Dispatch Plan
+- Dispatch 1: W4-1, W4-2, W4-3, W4-4 (tightly coupled -- escalation engine + tests)
+
+##### Wave 5: Polish (P1 items, depends on Wave 4)
+**Issues:** #118
+**Parallel dispatches:** 2
+**Blocked by:** Wave 4 (#117) -- needs escalation engine
+
+**W5-1: Statusline mode display** -- Weight: S, Gate: review, Deps: W4-1
+- Add mode indicator to statusline Line 1: `M1:observe` / `M2:amend` / `M3:patch` / `M4:build`
+- Read .op-mode via read_op_mode() in statusline.sh
+- Position: after model name, before project name (leftmost indicator after model)
+- Color: Mode 1 green (safe), Mode 2 yellow (caution), Mode 3 orange (elevated), Mode 4 red (full)
+- **Integration:** `scripts/statusline.sh` render function, read_op_mode() from state-lib.sh
+
+**W5-2: Mode-aware turn budgets** -- Weight: S, Gate: review, Deps: W4-1
+- Update `docs/DISPATCH.md` with mode-conditioned turn budgets:
+  - Mode 1: max_turns=15 (read-only, short sessions)
+  - Mode 2: max_turns=25 (config/docs, moderate)
+  - Mode 3: max_turns=50 (patch work, substantial)
+  - Mode 4: max_turns=85 (unchanged, full feature)
+- **Integration:** `docs/DISPATCH.md` turn budget table
+
+**W5-3: Mode-aware stop.sh** -- Weight: M, Gate: review, Deps: W4-1
+- Read .op-mode in stop.sh
+- Mode 1-2: skip @decision drift scan (no source files modified), skip plan-drift computation
+- Mode 3: run @decision scan only on modified files (not full codebase)
+- Mode 4: unchanged (current behavior)
+- **Integration:** `hooks/stop.sh` surface section
+
+**W5-4: Classification fast-path optimization** -- Weight: S, Gate: review, Deps: W2-1
+- Optimize classify_op_mode() to short-circuit for clear Mode 1/2 signals in <5ms
+- Benchmark: measure prompt-submit.sh latency with and without classifier
+- Target: <5ms additional latency for Mode 1/2 classification
+- **Integration:** `hooks/prompt-submit.sh` classify_op_mode()
+
+##### Dispatch Plan
+- Dispatch 1: W5-1, W5-2 (statusline + dispatch docs -- independent, lightweight)
+- Dispatch 2: W5-3, W5-4 (stop.sh + optimization -- independent but related to hooks)
+
+##### Critical Files
+- `docs/MODES.md` -- mode taxonomy, component contracts, safety invariants (new file)
+- `hooks/state-lib.sh` -- write_op_mode(), read_op_mode(), escalate_mode()
+- `hooks/core-lib.sh` -- _PROTECTED_STATE_FILES registry addition
+- `hooks/source-lib.sh` -- require_mode() lazy loading
+- `hooks/prompt-submit.sh` -- classify_op_mode() classifier
+- `hooks/pre-write.sh` -- mode-aware gate conditionals
+- `hooks/pre-bash.sh` -- mode-aware escalation triggers
+- `hooks/task-track.sh` -- dispatch mode validation
+- `hooks/stop.sh` -- mode-aware surface logic
+- `scripts/statusline.sh` -- mode display indicator
+- `docs/DISPATCH.md` -- mode-aware routing and turn budgets
+
+##### Decision Log
+<!-- Guardian appends here after wave completion -->
+
+#### Operational Mode System Worktree Strategy
+
+Main is sacred. Each wave works in its own worktree:
+- **Wave 1:** `~/.claude/.worktrees/mode-foundation` on branch `feature/mode-foundation`
+- **Wave 2:** `~/.claude/.worktrees/mode-classifier` on branch `feature/mode-classifier`
+- **Wave 3:** `~/.claude/.worktrees/mode-hooks` on branch `feature/mode-hooks`
+- **Wave 4:** `~/.claude/.worktrees/mode-escalation` on branch `feature/mode-escalation`
+- **Wave 5:** `~/.claude/.worktrees/mode-polish` on branch `feature/mode-polish`
+
+Note: Waves are strictly serial (W1 -> W2 -> W3 -> W4 -> W5). Within each wave, dispatch plan specifies parallelism.
+
+#### Operational Mode System References
+
+- Issue #109: Design operational mode system for safe non-dev actions and scaled component dispatch
+- PRD: `prds/operational-mode-system.md` (620 lines, deep research validated)
+- `hooks/pre-write.sh` -- current gate structure (6 gates: branch-guard, plan-check, test-gate, mock-gate, doc-gate, checkpoint)
+- `hooks/pre-bash.sh` -- current command validation
+- `hooks/prompt-submit.sh` -- current keyword detection (deferral language, mode classification target)
+- `hooks/guard.sh` -- Layer 1 safety invariants (mode-independent)
+- `hooks/core-lib.sh` -- is_source_file(), SOURCE_EXTENSIONS, _PROTECTED_STATE_FILES
+- `hooks/state-lib.sh` -- write_proof_status(), atomic_write() (patterns for write_op_mode)
+- `docs/DISPATCH.md` -- current dispatch routing rules
+- Deep research validation: 103 citations across 3 providers (OpenAI, Perplexity, Gemini)
 
 ---
 
