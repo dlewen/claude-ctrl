@@ -94,6 +94,37 @@ if [[ -x "$UPDATE_SCRIPT" ]]; then
     disown 2>/dev/null || true
 fi
 
+# --- Hook freshness check (W4-1) ---
+# Compares .hooks-gen timestamp (written by git-hooks/post-merge) to the
+# newest library file's mtime. If libraries are newer than last merge, a
+# git pull may have been interrupted. Warns the user to re-run the timestamp.
+_HOOKS_GEN="${CLAUDE_DIR}/.hooks-gen"
+if [[ -f "$_HOOKS_GEN" ]]; then
+    _GEN_TS=$(cat "$_HOOKS_GEN" 2>/dev/null || echo "0")
+    _NEWEST_LIB=0
+    for _lib in "${CLAUDE_DIR}/hooks/"*-lib.sh "${CLAUDE_DIR}/hooks/log.sh"; do
+        if [[ -f "$_lib" ]]; then
+            if [[ "$(uname)" == "Darwin" ]]; then
+                _lib_mtime=$(stat -f %m "$_lib" 2>/dev/null || echo "0")
+            else
+                _lib_mtime=$(stat -c %Y "$_lib" 2>/dev/null || echo "0")
+            fi
+            [[ "$_lib_mtime" -gt "$_NEWEST_LIB" ]] && _NEWEST_LIB="$_lib_mtime"
+        fi
+    done
+    if [[ "$_NEWEST_LIB" -gt "$_GEN_TS" ]]; then
+        CONTEXT_PARTS+=("WARNING: Hook libraries are newer than last merge (.hooks-gen). A git pull may have been interrupted. Run: date +%s > ~/.claude/.hooks-gen")
+    fi
+fi
+
+# --- Library consistency check (W4-0) ---
+# verify_library_consistency() checks all loaded _LIB_VERSION sentinels match
+# the expected version. Warnings appear if a partial sync left mixed versions.
+_LIB_WARNINGS=$(verify_library_consistency 1 2>&1 || true)
+if [[ -n "$_LIB_WARNINGS" ]]; then
+    CONTEXT_PARTS+=("$_LIB_WARNINGS")
+fi
+
 # --- Git state ---
 get_git_state "$PROJECT_ROOT"
 
