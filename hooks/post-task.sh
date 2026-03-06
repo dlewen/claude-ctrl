@@ -384,18 +384,36 @@ fi
 #   The marker and session-based fallback find trace #1 (no summary). The actual
 #   summary is in trace #2. Scanning recent traces for summary.md + project match
 #   is safe (project-scoped, 5 trace limit) and handles all detection failures.
+#
+# @decision DEC-AV-AGENT-TYPE-001
+# @title Validate agent_type=tester in fallback scan to prevent false AUTOVERIFY matches
+# @status accepted
+# @rationale The fallback scans tester-* named directories by prefix. However,
+#   trace directory names may collide or an implementer trace named with a tester
+#   prefix (edge case) might contain text like "AUTOVERIFY was not triggered" that
+#   matches the grep but is not a real AUTOVERIFY: CLEAN signal. Validating
+#   agent_type from manifest.json ensures we only read summaries from actual tester
+#   traces, not from other agent types. This also protects against the nested
+#   auto-flow scenario where an implementer's summary mentions AUTOVERIFY context.
+#   Fixes M2 (#4): AUTOVERIFY not detected in nested returns.
 if [[ -z "$SUMMARY_TEXT" ]]; then
     for _dir in $(ls -1d "${TRACE_STORE}/tester-"* 2>/dev/null | sort -r | head -5); do
         _smf="${_dir}/summary.md"
         [[ -s "$_smf" ]] || continue
         _sz=$(wc -c < "$_smf" 2>/dev/null || echo 0)
         [[ "$_sz" -ge 50 ]] || continue  # 50-byte minimum: real summaries are much larger
-        _mp=$(jq -r '.project // empty' "${_dir}/manifest.json" 2>/dev/null)
-        if [[ "$_mp" == "$PROJECT_ROOT" ]]; then
+        _mf="${_dir}/manifest.json"
+        [[ -f "$_mf" ]] || continue
+        _mp=$(jq -r '.project // empty' "$_mf" 2>/dev/null)
+        # Validate agent_type = tester to prevent false AUTOVERIFY matches from non-tester traces
+        _mat=$(jq -r '.agent_type // empty' "$_mf" 2>/dev/null)
+        if [[ "$_mp" == "$PROJECT_ROOT" && "$_mat" == "tester" ]]; then
             SUMMARY_TEXT=$(cat "$_smf" 2>/dev/null || echo "")
             _AV_TRACE_ID=$(basename "$_dir")
-            log_info "POST-TASK" "primary trace had no summary — found summary in $_AV_TRACE_ID (project-scoped scan)"
+            log_info "POST-TASK" "primary trace had no summary — found summary in $_AV_TRACE_ID (project-scoped scan, agent_type=tester validated)"
             break
+        elif [[ "$_mp" == "$PROJECT_ROOT" && -n "$_mat" && "$_mat" != "tester" ]]; then
+            log_info "POST-TASK" "skipping trace $(basename "$_dir"): agent_type=${_mat} (not tester)"
         fi
     done
 fi

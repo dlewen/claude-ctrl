@@ -171,11 +171,28 @@ project_hash() {
 #   exact screenshot bug (prompt-submit.sh wrote "verified" to scoped file,
 #   Gate A resolved to worktree file still showing "needs-verification") is
 #   now structurally impossible. Supersedes DEC-PROOF-PATH-002.
+#
+# @decision DEC-PROOF-STABLE-001
+# @title resolve_proof_file: prefer CLAUDE_PROJECT_DIR for stable cross-hook phash
+# @status accepted
+# @rationale Each hook invocation is a separate process. HOOK_INPUT.cwd varies
+#   between hooks (prompt-submit.sh gets session cwd, pre-bash.sh gets command cwd,
+#   task-track.sh gets task cwd). When CLAUDE_PROJECT_DIR is not set, detect_project_root()
+#   reads HOOK_INPUT.cwd and may return different paths, producing different phashes.
+#   Claude Code exports CLAUDE_PROJECT_DIR to all hook processes with the canonical
+#   project root for the session. Using CLAUDE_PROJECT_DIR as the first priority
+#   ensures all hooks produce the same phash regardless of their invocation context.
+#   Priority: CLAUDE_PROJECT_DIR > PROJECT_ROOT > detect_project_root().
+#   Fixes #106 (hash mismatch between prompt-submit.sh and pre-bash.sh/task-track.sh).
 resolve_proof_file() {
     local claude_dir="${CLAUDE_DIR:-$(get_claude_dir)}"
-    local project_root="${PROJECT_ROOT:-$(detect_project_root)}"
+    # Use CLAUDE_PROJECT_DIR (set by Claude Code, stable across all hook processes)
+    # before falling back to PROJECT_ROOT or re-detecting from HOOK_INPUT.cwd.
+    local project_root="${CLAUDE_PROJECT_DIR:-${PROJECT_ROOT:-$(detect_project_root)}}"
     local phash
     phash=$(project_hash "$project_root")
+    # Diagnostic: log which root was used so hash mismatches can be diagnosed
+    echo "resolve_proof_file: root=${project_root} phash=${phash}" >&2
     echo "${claude_dir}/.proof-status-${phash}"
 }
 
