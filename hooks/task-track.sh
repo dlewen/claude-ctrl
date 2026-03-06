@@ -55,6 +55,7 @@ esac
 
 # Load domain libraries needed by gates (deferred from top-level for non-gated early exit)
 require_trace
+mkdir -p "$TRACE_STORE" 2>/dev/null || true
 
 # --- Gate A.0: Duplicate guardian detection ---
 # Prevents burst dispatch: if another Guardian is already active for this project,

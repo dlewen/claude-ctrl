@@ -56,6 +56,7 @@ require_ci
 
 PROJECT_ROOT=$(detect_project_root)
 CLAUDE_DIR=$(get_claude_dir)
+_PHASH=$(project_hash "$PROJECT_ROOT")
 CONTEXT_PARTS=()
 
 # --- Fix 1: Read update status from previous session's check (one-shot display) ---
@@ -758,7 +759,7 @@ if [[ -d "$TRACE_STORE" ]]; then
     #   ALL projects. If Project A had an active agent, Project B's stale proof-status
     #   would be preserved even though no agents were running for Project B. Fix: count
     #   only markers with the project hash suffix. Also clean the scoped proof file.
-    _PHASH=$(project_hash "$PROJECT_ROOT")
+    # _PHASH computed at line 59 (top-level, before TRACE_STORE conditional)
     # @decision DEC-SESSION-INIT-PROOF-CLEAN-001
     # @title Count only current-session markers for proof cleanup guard
     # @status accepted
@@ -956,8 +957,7 @@ done
 # Stale passing results from a previous session must not satisfy the gate.
 # test-runner.sh will regenerate it after the first Write/Edit in this session.
 # Check new path (state/{phash}/test-status) first, fall back to legacy .test-status.
-_PHASH_TS=$(project_hash "$PROJECT_ROOT")
-_NEW_TEST="${CLAUDE_DIR}/state/${_PHASH_TS}/test-status"
+_NEW_TEST="${CLAUDE_DIR}/state/${_PHASH}/test-status"
 _OLD_TEST="${CLAUDE_DIR}/.test-status"
 TEST_STATUS=""
 if [[ -f "$_NEW_TEST" ]]; then
