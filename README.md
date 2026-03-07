@@ -11,21 +11,21 @@
 
 **Instructions guide. Hooks enforce.**
 
-A deterministic governance layer for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Shell-script hooks intercept every tool call — Bash commands, file writes, agent dispatches, session boundaries — and enforce development discipline mechanically. Four specialized agents (Planner, Implementer, Tester, Guardian) handle the full lifecycle. The model doesn't decide the process. The hooks do.
+A deterministic governance layer for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that uses shell-script hooks to intercept every tool call —bash commands, file writes, agent dispatches, session boundaries— and mechanically enforce sound principles. Responsibilities are divided between specialized agents (Planner, Implementer, Tester, Guardian) to ensure quality work. The hooks enforce the process so the model can focus on the task at hand.
 
 ---
 
 ## Design Philosophy
 
-Tell a model "never commit on main" and it works — until context pressure erases the rule. After compaction, after cognitive load, after forty minutes of deep implementation, constraints that live in the model's memory aren't constraints. They're suggestions. Wire a hook that fires before every Bash command and mechanically denies commits on main — and it works regardless of what the model remembers or forgets.
+Telling a model to 'never commit on main' works... until context pressure erases the rule. After compaction, under heavy cognitive load, after 40 minutes of deep implementation, the constraints that live in the model's context aren't constraints. At best, they're suggestions. Most of the time, they're prayers.
 
-LLMs are not deterministic systems with probabilistic quirks. They are **probabilistic systems** — and the only way to harness them into producing reliably good outcomes is through deterministic, event-based enforcement. An instruction is a hope. A feedback loop is a mechanism. Cybernetics gave us this framework decades ago.
+LLMs are not deterministic systems with probabilistic quirks. They are **probabilistic systems** — and the only way to harness them into producing reliably good outcomes is through deterministic, event-based enforcement. Wiring a hook that fires before every bash command and mechanically denies commits on main works regardless of what the model remembers or forgets or decides to prioritize. Cybernetics gave us a framework to harness these systems decades ago. The hook system enforces standards determinitically. The observatory jots down traces to analyze for each run. That feedback improves performance and guides how the gates adapt. 
 
-This system enforces. The observatory analyzes. The traces feed back. The gates adapt. Every version teaches me something about how to govern probabilistic systems, and those lessons feed into the next iteration. I call the end-state goal **Self-Evaluating Self-Adaptive Programs (SESAPs)** — probabilistic systems constrained to deterministically produce a range of desired outcomes. Not controlled through instruction. Controlled through mechanism.
+Every version teaches me something about how to govern probabilistic systems, and those lessons feed into the next iteration. The end-state goal is an instantiation of what I call **Self-Evaluating Self-Adaptive Programs (SESAPs)**: probabilistic systems constrained to deterministically produce a range of desired outcomes.
 
-Most AI coding harnesses today rely entirely on prompt-level guidance for constraints. Claude Code is one of the few that provides comprehensive event-based hooks — the mechanical layer that makes deterministic governance possible. Without it, every session is a bet against context pressure. This project is meant to address the disturbing gap between developers at the frontier and the majority of token consumers vibing at the roulette wheel hoping for a payday.
+Most AI coding harnesses today rely entirely on prompt-level guidance for constraints. So far, Claude Code has the more comprehensive event-based hooks support that serves as the mechanical layer that makes deterministic governance possible. Without it, every session is a bet against context pressure. This project is meant to address the disturbing gap between developers at the frontier and the majority of token junkies vibing at the roulette wheel hoping for a payday.
 
-I've never been much of a gambler.
+I've never been much of a gambler myself.
 
 *— [JAGS](https://x.com/juanandres_gs)*
 
