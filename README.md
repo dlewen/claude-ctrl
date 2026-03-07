@@ -15,13 +15,13 @@ A batteries-included governance layer for Claude Code. Four specialized agents h
 
 ---
 
-## What's New in v3.1 (Metanoia)
+## What's New in v3.0 (Metanoia)
 
 This release represents **617 commits** over v2.0 — a ground-up refactor of the hook architecture, state management, and agent governance.
 
 **The headline:** 17 individual hook scripts consolidated into 4 entry points backed by 10 lazy-loaded domain libraries. The result is **74% less hook overhead** per session with zero governance loss.
 
-| v2.0 | v3.1 |
+| v2.0 | v3.0 |
 |------|------|
 | 17 hooks firing independently | 4 consolidated entry points |
 | ~26s hook overhead/session | ~6.7s hook overhead/session |

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.0] - 2026-03-07
+## [3.0.0] - 2026-03-07
 
 ### Added
 - `feature/sqlite-w1`: SQLite WAL-based state store (Wave 1) — rewrite hooks/state-lib.sh with sqlite3 backend (state_update, state_read, state_cas, state_delete, workflow_id), WAL mode with busy_timeout=5000ms, per-workflow isolation via workflow_id column, SQL injection prevention, lattice-enforced CAS, legacy jq functions preserved as _legacy_* for Wave 2 migration; 20-test suite in test-sqlite-state.sh covering schema, CRUD, CAS, lattice, concurrency, and injection; `--scope sqlite` in run-hooks.sh (DEC-SQLITE-001 through DEC-SQLITE-010, closes #128, #129)
@@ -232,6 +232,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credential exposure protection via `.env` read deny rules
 - Hook input sanitization via `log.sh` shared library
 
-[3.1.0]: https://github.com/juanandresgs/claude-ctrl/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/juanandresgs/claude-ctrl/releases/tag/v3.0.0
 [3.0.0]: https://github.com/juanandresgs/claude-ctrl/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/juanandresgs/claude-ctrl/releases/tag/v2.0.0
