@@ -81,6 +81,7 @@
     "ask": [],
     "defaultMode": "plan"
   },
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "context7",
@@ -339,9 +340,13 @@
     "command": "$HOME/.claude/scripts/statusline.sh"
   },
   "autoUpdatesChannel": "latest",
+  "voiceEnabled": true,
   "skipDangerousModePermissionPrompt": true,
   "installation": {
     "method": "native"
   },
-  "model": "opus"
+  "effortLevel": "high",
+  "enabledPlugins": {
+    "frontend-design@claude-code-plugins": true
+  }
 }
