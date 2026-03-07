@@ -70,6 +70,26 @@ Manual worktree management              Auto-sweep, roster, CWD recovery
 
 See the full [CHANGELOG](CHANGELOG.md) for the complete list.
 
+### Performance (v2.1 → v3.0)
+
+**BLUF: v3.0 delivers 75% more successes at the same cost per success.** The governance overhead pays for itself.
+
+Measured across 18 trials (3 tasks × 3 trials × 2 configs) using the [Claude Code Performance Harness](https://github.com/juanandresgs/cc-perf-harness).
+
+v3.0 succeeds nearly twice as often across easy, medium, and hard tasks (78% vs 44%). When it fails, it wastes 62% fewer tokens (29% waste ratio vs 76%). It cracked the hard refactoring task that v2.1 couldn't solve at all (33% vs 0%).
+
+The multi-agent pipeline uses ~55% more turns per success (31 vs 20). Governance has a cost. But cost-per-success is identical (+1.3%) because three-quarters of v2.1's token budget went to trials that produced nothing.
+
+| Metric | v2.1 | v3.0 | Delta |
+|--------|------|------|-------|
+| Success Rate | 44% (4/9) | 78% (7/9) | **+77%** |
+| Token Waste Ratio | 76% | 29% | **-62%** |
+| CPSO (tokens/success) | 1,190,572 | 1,206,306 | +1.3% (same cost, 75% more successes) |
+| PAR-10 | 11,246,198 | 5,141,470 | **-54%** |
+| Turns/success | 20.0 | 31.0 | +55% (governance cost) |
+
+<sub>**CPSO** (Cost Per Successful Outcome) = total tokens ÷ successes — includes the cost of failures. **PAR-10** from SAT solver competitions — failed trials count 10× max, punishing unreliable configs. **Token Waste Ratio** = failed tokens ÷ total tokens.</sub>
+
 ---
 
 ## How It Works
@@ -84,56 +104,39 @@ The model writes on main, skips tests, force-pushes, and forgets the plan once t
 
 **With claude-ctrl** — the same feature request triggers a self-correcting pipeline:
 
-```
-                ┌─────────────────────────────────────────┐
-                │           You describe a feature         │
-                └──────────────────┬──────────────────────┘
-                                   ▼
-                ┌──────────────────────────────────────────┐
-                │  Planner agent:                          │
-                │    1a. Problem decomposition (evidence)   │
-                │    1b. User requirements (P0/P1/P2)      │
-                │    1c. Success metrics                   │
-                │    2.  Research gate → architecture       │
-                │  → MASTER_PLAN.md + GitHub Issues         │
-                └──────────────────┬───────────────────────┘
-                                   ▼
-                ┌──────────────────────────────────────────┐
-                │  Guardian agent creates isolated worktree │
-                └──────────────────┬───────────────────────┘
-                                   ▼
-              ┌────────────────────────────────────────────────┐
-              │              Implementer codes                  │
-              │                                                 │
-              │   write src/ ──► test-gate: tests passing? ─┐   │
-              │       ▲              no? warn, then block   │   │
-              │       └──── fix tests, write again ◄────────┘   │
-              │                                                 │
-              │   write src/ ──► plan-check: plan stale? ───┐   │
-              │       ▲              yes? block              │   │
-              │       └──── update plan, write again ◄──────┘   │
-              │                                                 │
-              │   write src/ ──► doc-gate: documented? ─────┐   │
-              │       ▲              no? block               │   │
-              │       └──── add headers + @decision ◄───────┘   │
-              └────────────────────────┬───────────────────────┘
-                                       ▼
-                ┌──────────────────────────────────────────────┐
-                │  Tester agent: live E2E verification          │
-                │  → proof-of-work evidence written to disk     │
-                │  → check-tester.sh: auto-verify or           │
-                │    surface report for user approval           │
-                └──────────────────────┬───────────────────────┘
-                                       ▼
-                ┌──────────────────────────────────────────────┐
-                │  Guardian agent: commit (requires verified    │
-                │  proof-of-work + approval) → merge to main   │
-                └──────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["You describe a feature"] --> B
+    B["<b>Planner</b><br/>Decompose · requirements · architecture<br/>→ MASTER_PLAN.md + GitHub Issues"]
+    B --> C["Orchestrator creates isolated worktree"]
+    C --> D
+
+    subgraph D [" Implementer — every write passes through pre-write.sh gates "]
+        direction TB
+        W["Write code"] --> G1{"on main?"}
+        G1 -->|"yes · deny"| W
+        G1 -->|"no"| G2{"plan exists?"}
+        G2 -->|"no · deny"| W
+        G2 -->|"yes"| G3{"tests passing?"}
+        G3 -->|"failing · warn→block"| W
+        G3 -->|"yes"| G4{"internal mocks?"}
+        G4 -->|"yes · warn→block"| W
+        G4 -->|"no"| G5{"documented?"}
+        G5 -->|"no · deny"| W
+        G5 -->|"yes"| POST["post-write: lint · track · proof invalidation"]
+    end
+
+    D --> E["<b>Tester</b><br/>Run feature live · write proof-of-work evidence"]
+    E --> F{"check-tester.sh"}
+    F -->|"High confidence"| G["Auto-verify"]
+    F -->|"Caveats"| H["Surface report for user approval"]
+    G --> I
+    H --> I["<b>Guardian</b><br/>Commit + merge to main"]
 ```
 
-Every arrow is a hook. Every feedback loop is automatic. The model doesn't choose to follow the process — the hooks won't let it skip. Try to write code without a plan and you're pushed back. Try to commit with failing tests and you're pushed back. Try to skip documentation and you're pushed back. Try to commit without tester sign-off and you're pushed back. The system self-corrects until the work is right.
+Every arrow is a hook. Every feedback loop is mechanical. The model doesn't choose to follow the process — the hooks won't let it skip. Write on main? Denied. No plan? Denied. Tests failing? Blocked. Undocumented? Blocked. No tester sign-off? Commit denied. The system self-corrects until the work meets the standard.
 
-**The result:** you move faster because you never think about process. The hooks think about it for you. Dangerous commands get denied with corrections (`--force` → use `--force-with-lease`, `/tmp/` → use project `tmp/`). Everything else either flows through or gets caught. You just describe what you want and review what comes out.
+**The result:** you move faster because you never think about process. The hooks think about it for you. Dangerous commands get denied with corrections (`--force` → `--force-with-lease`, `/tmp/` → project `tmp/`). You describe what you want and review what comes out.
 
 ---
 
