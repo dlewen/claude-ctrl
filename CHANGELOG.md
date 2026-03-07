@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `feature/sqlite-state-store`: SQLite Unified State Store initiative added to MASTER_PLAN.md — 4-wave implementation plan replacing scattered flat-file state with single SQLite WAL database, 8 architectural decisions (DEC-SQLITE-001 through 008), 9 P0 requirements, issues #128-#134
+
 ### Fixed
 - `fix/125-autoverify-sort`: Fix auto-verify trace discovery — replace `sort -r` (alphabetical) with `ls -t` (mtime-ordered) in Tier 2 and Tier 3 fallback scans so current-session traces are found first; add ghost trace detection to skip stale active traces with no summary after 60s (DEC-AV-GHOST-001)
 - `feature/xplatform-reliability`: Portable `_file_mtime()` and `_with_timeout()` wrappers in core-lib.sh — replace 25 inline `stat -f %m` patterns across 12 files with Linux-first stat order (DEC-XPLAT-001), replace 10 bare `timeout` commands across 5 files with GNU timeout + Perl alarm fallback (DEC-XPLAT-002)
