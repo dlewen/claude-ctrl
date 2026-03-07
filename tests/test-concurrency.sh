@@ -123,17 +123,19 @@ export _HOOK_NAME="test-concurrency"
 state_update ".concurrent.key_a" "value_a" "test-t01" 2>/dev/null || true
 state_update ".concurrent.key_b" "value_b" "test-t01" 2>/dev/null || true
 
-STATE_FILE="$T01_CLAUDE/state/state.json"
-if [[ -f "$STATE_FILE" ]]; then
-    KEY_A=$(jq -r '.concurrent.key_a // empty' "$STATE_FILE" 2>/dev/null || echo "")
-    KEY_B=$(jq -r '.concurrent.key_b // empty' "$STATE_FILE" 2>/dev/null || echo "")
+# With SQLite WAL backend, state is in state.db — verify via state_read()
+# (state.json no longer created by state_update; storage backend is SQLite)
+STATE_DB="$T01_CLAUDE/state/state.db"
+if [[ -f "$STATE_DB" ]]; then
+    KEY_A=$(state_read ".concurrent.key_a" 2>/dev/null || echo "")
+    KEY_B=$(state_read ".concurrent.key_b" 2>/dev/null || echo "")
     if [[ "$KEY_A" == "value_a" && "$KEY_B" == "value_b" ]]; then
         pass_test
     else
-        fail_test "Expected both keys in state.json; key_a='$KEY_A' key_b='$KEY_B'"
+        fail_test "Expected both keys in state.db; key_a='$KEY_A' key_b='$KEY_B'"
     fi
 else
-    fail_test "state.json not created at $STATE_FILE"
+    fail_test "state.db not created at $STATE_DB"
 fi
 
 # Reset exported vars to avoid leaking into subsequent tests
@@ -244,23 +246,66 @@ fi
 
 
 # ===========================================================================
-# T05: state_update() uses _lock_fd — source-level verification
+# T05: state_update() SQLite WAL concurrency — two concurrent writes both succeed
 #
-# Verifies that state_update() in state-lib.sh uses _lock_fd for serialization.
-# This validates DEC-STATE-002 is implemented with the platform-native primitive.
+# SQLite WAL replaced flock serialization (DEC-SQLITE-001). state_update() no
+# longer calls _lock_fd; SQLite's busy_timeout=5000ms handles contention
+# transparently via WAL mode. This test verifies the WAL concurrency guarantee:
+# two concurrent state_update() calls on different keys both succeed and
+# state.db is created by the SQLite backend.
+#
+# Uses helper scripts (not subshells) to avoid set -euo pipefail inheritance
+# that would cause background processes to exit before writing result files.
 # ===========================================================================
-run_test "T05: state_update() uses _lock_fd (source-level verification)"
+run_test "T05: state_update() SQLite WAL — two concurrent writes both succeed"
 
-STATE_LIB="$HOOKS_DIR/state-lib.sh"
-if [[ -f "$STATE_LIB" ]]; then
-    if grep -A 30 '^state_update()' "$STATE_LIB" | grep -q '_lock_fd'; then
-        pass_test
-    else
-        fail_test "state_update() does not call _lock_fd in $STATE_LIB"
-    fi
+T05_ENV=$(make_temp_env)
+T05_CLAUDE="$T05_ENV/.claude"
+T05_RESULT_A="$TMPDIR_BASE/t05-result-a"
+T05_RESULT_B="$TMPDIR_BASE/t05-result-b"
+
+# Helper script: sources libs in a clean (non-set-e) context, runs state_update
+T05_HELPER="$TMPDIR_BASE/t05-helper.sh"
+cat > "$T05_HELPER" <<T05_HELPER_EOF
+#!/usr/bin/env bash
+# T05 helper: run a single state_update and write exit code to result file
+HOOKS_DIR="\$1"
+CLAUDE_DIR="\$2"
+PROJECT_ROOT="\$3"
+CLAUDE_SESSION_ID="\$4"
+KEY="\$5"
+VALUE="\$6"
+RESULT_FILE="\$7"
+export CLAUDE_DIR PROJECT_ROOT CLAUDE_SESSION_ID
+export _HOOK_NAME="test-concurrency"
+source "\$HOOKS_DIR/log.sh" 2>/dev/null
+source "\$HOOKS_DIR/source-lib.sh" 2>/dev/null
+require_state 2>/dev/null
+state_update "\$KEY" "\$VALUE" "test-t05" 2>/dev/null
+echo \$? > "\$RESULT_FILE"
+T05_HELPER_EOF
+chmod +x "$T05_HELPER"
+
+bash "$T05_HELPER" "$HOOKS_DIR" "$T05_CLAUDE" "$T05_ENV" "t05-session-a-$$" ".concurrent.slot_a" "from_a" "$T05_RESULT_A" &
+T05_PID_A=$!
+bash "$T05_HELPER" "$HOOKS_DIR" "$T05_CLAUDE" "$T05_ENV" "t05-session-b-$$" ".concurrent.slot_b" "from_b" "$T05_RESULT_B" &
+T05_PID_B=$!
+
+wait "$T05_PID_A" 2>/dev/null || true
+wait "$T05_PID_B" 2>/dev/null || true
+
+T05_EXIT_A=$(cat "$T05_RESULT_A" 2>/dev/null || echo "missing")
+T05_EXIT_B=$(cat "$T05_RESULT_B" 2>/dev/null || echo "missing")
+
+# Verify state.db was created (SQLite backend active)
+STATE_DB="$T05_CLAUDE/state/state.db"
+if [[ "$T05_EXIT_A" == "0" && "$T05_EXIT_B" == "0" && -f "$STATE_DB" ]]; then
+    pass_test
 else
-    fail_test "state-lib.sh not found at $STATE_LIB"
+    fail_test "Expected both concurrent writes to succeed; exit_a=$T05_EXIT_A exit_b=$T05_EXIT_B state_db_exists=$([ -f "$STATE_DB" ] && echo yes || echo no)"
 fi
+
+unset CLAUDE_DIR PROJECT_ROOT CLAUDE_SESSION_ID 2>/dev/null || true
 
 
 # ===========================================================================

@@ -298,9 +298,12 @@ verify_library_consistency() {
         mismatches=$((mismatches + 1))
     fi
 
-    # Check optionally-loaded domain libraries (only if loaded)
+    # Check optionally-loaded domain libraries (only if loaded).
+    # Format: VAR:LIBNAME:EXPECTED (EXPECTED defaults to expected_version if omitted).
+    # Per-library expected versions allow state-lib.sh to be at v2 while
+    # other libraries remain at v1 (DEC-SQLITE-001 Wave 1 rewrite).
     local lib_vars=(
-        "_STATE_LIB_VERSION:state-lib.sh"
+        "_STATE_LIB_VERSION:state-lib.sh:2"
         "_SESSION_LIB_VERSION:session-lib.sh"
         "_TRACE_LIB_VERSION:trace-lib.sh"
         "_PLAN_LIB_VERSION:plan-lib.sh"
@@ -311,10 +314,14 @@ verify_library_consistency() {
 
     for entry in "${lib_vars[@]}"; do
         local var="${entry%%:*}"
-        local lib="${entry#*:}"
+        local rest="${entry#*:}"
+        local lib="${rest%%:*}"
+        local lib_expected="${rest#*:}"
+        # If no per-library expected version specified, use the global one
+        [[ "$lib_expected" == "$lib" ]] && lib_expected="$expected_version"
         local val="${!var:-}"
-        if [[ -n "$val" && "$val" != "$expected_version" ]]; then
-            echo "WARNING: $lib version mismatch (loaded=$val expected=$expected_version)"
+        if [[ -n "$val" && "$val" != "$lib_expected" ]]; then
+            echo "WARNING: $lib version mismatch (loaded=$val expected=$lib_expected)"
             mismatches=$((mismatches + 1))
         fi
     done

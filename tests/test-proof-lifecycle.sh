@@ -328,16 +328,21 @@ T10_TRACE=$(mktemp -d)
     write_proof_status "verified" "$T10_REPO" 2>/dev/null
 )
 
-T10_STATE="$T10_REPO/.claude/state/state.json"
-if [[ -f "$T10_STATE" ]]; then
-    T10_VAL=$(jq -r '.proof.status // empty' "$T10_STATE" 2>/dev/null)
+# With SQLite WAL backend, state is written to state.db (not state.json).
+# Verify via direct sqlite3 query that write_proof_status dual-wrote to SQLite.
+# write_proof_status stores the key as ".proof.status" (with leading dot).
+T10_STATE_DB="$T10_REPO/.claude/state/state.db"
+if [[ -f "$T10_STATE_DB" ]]; then
+    # Direct sqlite3 query bypasses workflow_id scoping — verify any row with key=.proof.status
+    T10_VAL=$(sqlite3 "$T10_STATE_DB" \
+        "SELECT value FROM state WHERE key='.proof.status' LIMIT 1;" 2>/dev/null || echo "")
     if [[ "$T10_VAL" == "verified" ]]; then
         pass_test
     else
-        fail_test "state.json proof.status='$T10_VAL', expected 'verified'"
+        fail_test "state.db proof.status='$T10_VAL', expected 'verified'"
     fi
 else
-    fail_test "state.json not created by write_proof_status"
+    fail_test "state.db not created by write_proof_status"
 fi
 rm -rf "$T10_REPO" "$T10_TRACE"
 

@@ -112,6 +112,8 @@ _T02_RESULT=$(
         require_doc
         require_ci
         # Now run the consistency check — capture exit code separately
+        # Pass expected_version=1 for all non-state libs; state-lib.sh has its
+        # own pinned expected version (2) inside verify_library_consistency.
         _WARN_OUT=$(verify_library_consistency 1 2>&1) || _EXIT_CODE=$?
         _EXIT_CODE="${_EXIT_CODE:-0}"
         echo "exit=$_EXIT_CODE"
