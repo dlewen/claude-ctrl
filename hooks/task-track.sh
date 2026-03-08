@@ -60,6 +60,30 @@ mkdir -p "$TRACE_STORE" 2>/dev/null || true
 # --- Gate A.0: Duplicate guardian detection ---
 # Prevents burst dispatch: if another Guardian is already active for this project,
 # deny the new dispatch. Fixes RC7 — 5 guardians spawned in 38 seconds.
+#
+# @decision DEC-STALE-MARKER-004
+# @title Gate A.0 validates trace status before denying Guardian dispatch
+# @status accepted
+# @rationale The original Gate A.0 only checked marker age (< 600s TTL), causing
+#   false blocks in three scenarios:
+#   1. Guardian completes but finalize_trace() fails to clean the marker (timeout
+#      race, session crash) — the marker lingers, blocking the next dispatch.
+#   2. A new session starts — old session's markers persist until 30-min cleanup.
+#   3. A pre-dispatch marker was written (line 139 below) but init_trace() in
+#      SubagentStart never ran (API rate limit, agent refused to start).
+#
+#   Fix mirrors Gate B's DEC-STALE-MARKER-003 pattern: read marker content, look
+#   up the trace manifest status, and clean stale markers rather than blocking.
+#
+#   Three content formats handled:
+#   - trace_id (no | separator): look up manifest.status; if completed/crashed →
+#     marker is stale, clean and allow.
+#   - "pre-dispatch|<epoch>": agent never called init_trace(). The embedded epoch
+#     determines staleness: if > 120s old, agent never started → clean and allow.
+#   - Anything else (unknown format): treat as stale, clean and allow.
+#
+#   Only emit_deny when the trace manifest shows status="active" (genuine conflict)
+#   or when a pre-dispatch marker is < 120s old (agent startup window).
 if [[ "$AGENT_TYPE" == "guardian" ]]; then
     _PHASH_A0=$(project_hash "$PROJECT_ROOT")
     _EXISTING_MARKER=$(find "$TRACE_STORE" -name ".active-guardian-*-${_PHASH_A0}" -newer "$TRACE_STORE" -mmin -10 2>/dev/null | head -1)
@@ -67,7 +91,44 @@ if [[ "$AGENT_TYPE" == "guardian" ]]; then
         # Check if the marker is within TTL (600s)
         _MARKER_AGE=$(( $(date +%s) - $(_file_mtime "$_EXISTING_MARKER") ))
         if [[ "$_MARKER_AGE" -lt 600 ]]; then
-            emit_deny "Cannot dispatch Guardian: another Guardian is already active for this project (marker: $(basename "$_EXISTING_MARKER"), age: ${_MARKER_AGE}s). Wait for it to complete or clean stale markers."
+            # Read marker content to distinguish active vs stale markers.
+            _MARKER_CONTENT=$(cat "$_EXISTING_MARKER" 2>/dev/null || echo "")
+
+            if [[ "$_MARKER_CONTENT" == "pre-dispatch|"* ]]; then
+                # Pre-dispatch format: agent was dispatched but init_trace() never ran.
+                # The embedded timestamp tells us when the dispatch happened.
+                # If > 120s ago, the agent never started — treat as stale.
+                _PD_EPOCH=$(echo "$_MARKER_CONTENT" | cut -d'|' -f2)
+                _PD_AGE=$(( $(date +%s) - ${_PD_EPOCH:-0} ))
+                if [[ "$_PD_AGE" -ge 120 ]]; then
+                    # Agent never started (or crashed before init_trace). Clean and allow.
+                    rm -f "${TRACE_STORE}/.active-guardian-"*"-${_PHASH_A0}" 2>/dev/null || true
+                    # Fall through — no deny
+                else
+                    emit_deny "Cannot dispatch Guardian: a Guardian dispatch is in progress for this project (marker age: ${_MARKER_AGE}s, dispatch age: ${_PD_AGE}s). Wait for agent startup to complete or for the 120s window to expire."
+                fi
+            elif [[ "$_MARKER_CONTENT" != *"|"* && -n "$_MARKER_CONTENT" ]]; then
+                # Trace ID format: look up manifest.status to determine if genuinely active.
+                _A0_MANIFEST="${TRACE_STORE}/${_MARKER_CONTENT}/manifest.json"
+                _A0_STATUS=$(jq -r '.status // "unknown"' "$_A0_MANIFEST" 2>/dev/null || echo "unknown")
+                if [[ "$_A0_STATUS" == "completed" || "$_A0_STATUS" == "crashed" ]]; then
+                    # Trace already finalized — marker is stale (finalize_trace cleanup failed).
+                    # Clean it and allow dispatch. Mirrors DEC-STALE-MARKER-003 (Gate B).
+                    rm -f "${TRACE_STORE}/.active-guardian-"*"-${_PHASH_A0}" 2>/dev/null || true
+                    # Fall through — no deny
+                elif [[ "$_A0_STATUS" == "active" ]]; then
+                    emit_deny "Cannot dispatch Guardian: another Guardian is already active for this project (trace: ${_MARKER_CONTENT}, age: ${_MARKER_AGE}s). Wait for it to complete or clean stale markers."
+                else
+                    # Unknown/missing manifest — treat as stale, clean and allow.
+                    # No manifest means init_trace never ran or trace dir was deleted.
+                    rm -f "${TRACE_STORE}/.active-guardian-"*"-${_PHASH_A0}" 2>/dev/null || true
+                    # Fall through — no deny
+                fi
+            else
+                # Unknown marker format — treat as stale, clean and allow.
+                rm -f "${TRACE_STORE}/.active-guardian-"*"-${_PHASH_A0}" 2>/dev/null || true
+                # Fall through — no deny
+            fi
         fi
     fi
 fi
