@@ -48,51 +48,55 @@ The model writes on main, skips tests, force-pushes, and forgets the plan once t
 
 **With this system** — the same feature request triggers a self-correcting pipeline:
 
-```
-                ┌─────────────────────────────────────────┐
-                │           You describe a feature         │
-                └──────────────────┬──────────────────────┘
-                                   ▼
-                ┌──────────────────────────────────────────┐
-                │  Planner agent:                          │
-                │    1a. Problem decomposition (evidence)   │
-                │    1b. User requirements (P0/P1/P2)      │
-                │    1c. Success metrics                   │
-                │    2.  Research gate → architecture       │
-                │  → MASTER_PLAN.md + GitHub Issues         │
-                └──────────────────┬───────────────────────┘
-                                   ▼
-                ┌──────────────────────────────────────────┐
-                │  Guardian agent creates isolated worktree │
-                └──────────────────┬───────────────────────┘
-                                   ▼
-              ┌────────────────────────────────────────────────┐
-              │              Implementer codes                  │
-              │                                                 │
-              │   write src/ ──► test-gate: tests passing? ─┐   │
-              │       ▲              no? warn, then block   │   │
-              │       └──── fix tests, write again ◄────────┘   │
-              │                                                 │
-              │   write src/ ──► plan-check: plan stale? ───┐   │
-              │       ▲              yes? block              │   │
-              │       └──── update plan, write again ◄──────┘   │
-              │                                                 │
-              │   write src/ ──► doc-gate: documented? ─────┐   │
-              │       ▲              no? block               │   │
-              │       └──── add headers + @decision ◄───────┘   │
-              └────────────────────────┬───────────────────────┘
-                                       ▼
-                ┌──────────────────────────────────────────────┐
-                │  Tester agent: live E2E verification          │
-                │  → proof-of-work evidence written to disk     │
-                │  → check-tester.sh: auto-verify or           │
-                │    surface report for user approval           │
-                └──────────────────────┬───────────────────────┘
-                                       ▼
-                ┌──────────────────────────────────────────────┐
-                │  Guardian agent: commit (requires verified    │
-                │  proof-of-work + approval) → merge to main   │
-                └──────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A([You describe a feature]) --> B
+
+    B["**Planner agent**
+    1a. Problem decomposition with evidence
+    1b. User requirements — P0 / P1 / P2
+    1c. Success metrics
+    2.  Research gate → architecture decision
+    ──────────────────────────────
+    Output: MASTER_PLAN.md + GitHub Issues"]
+
+    B --> C["**Guardian agent**
+    Creates isolated git worktree"]
+
+    C --> D
+
+    subgraph D["**Implementer codes**"]
+        direction TB
+        W1[write src/] --> TG{test-gate:\ntests passing?}
+        TG -- no: warn, then block --> FT[fix tests]
+        FT --> W1
+
+        W2[write src/] --> PC{plan-check:\nplan stale?}
+        PC -- yes: block --> UP[update plan]
+        UP --> W2
+
+        W3[write src/] --> DG{doc-gate:\ndocumented?}
+        DG -- no: block --> AH[add headers + @decision]
+        AH --> W3
+
+        TG -- yes --> W2
+        PC -- no --> W3
+        DG -- yes --> DONE_IMPL[ ]
+    end
+
+    DONE_IMPL --> E
+
+    E["**Tester agent**
+    Live E2E verification
+    → proof-of-work evidence written to disk
+    → check-tester.sh: auto-verify
+      or surface report for user approval"]
+
+    E --> F["**Guardian agent**
+    Commit — requires verified proof-of-work + approval
+    → merge to main"]
+
+    style DONE_IMPL fill:none,stroke:none
 ```
 
 Every arrow is a hook. Every feedback loop is automatic. The model doesn't choose to follow the process — the hooks won't let it skip. Try to write code without a plan and you're pushed back. Try to commit with failing tests and you're pushed back. Try to skip documentation and you're pushed back. Try to commit without tester sign-off and you're pushed back. The system self-corrects until the work is right.
