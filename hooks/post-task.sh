@@ -468,7 +468,95 @@ fi
 
 # --- Check for AUTOVERIFY: CLEAN signal ---
 if ! echo "$SUMMARY_TEXT" | grep -q 'AUTOVERIFY: CLEAN'; then
-    log_info "POST-TASK" "AUTOVERIFY: CLEAN not found in summary.md — running completeness check"
+    log_info "POST-TASK" "AUTOVERIFY: CLEAN not found in summary.md — running inference check"
+
+    # --- Inference check: did tester write a clean assessment but forget the signal? ---
+    #
+    # @decision DEC-AV-MISS-001
+    # @title Detect objectively clean assessments missing AUTOVERIFY: CLEAN signal
+    # @status accepted
+    # @rationale The positive-default framing in tester.md (DEC-TESTER-AUTOVERIFY-001)
+    #   makes AUTOVERIFY: CLEAN the expected outcome for clean runs, but testers trained
+    #   on the old opt-in framing may still omit it. This inference check detects when
+    #   a High-confidence full-coverage assessment is present and the signal is merely
+    #   missing — rather than failing to auto-verify silently. A loud advisory surfaces
+    #   the gap to the orchestrator who can use INFER-VERIFY to dispatch Guardian
+    #   without a second tester run. The advisory does NOT write proof-status=verified;
+    #   that gate remains in place. This check runs BEFORE the completeness check so
+    #   a complete-but-signal-missing tester is not mis-classified as incomplete.
+    #   Issue #195.
+    _AV_MISS=false
+    if [[ -n "$SUMMARY_TEXT" ]]; then
+        # Extract Verification Assessment section (same scoping as secondary validation below)
+        _MISS_VA_START=$(echo "$SUMMARY_TEXT" | grep -n -E '^#{1,3} Verification Assessment' | head -1 | cut -d: -f1 || true)
+        if [[ -n "$_MISS_VA_START" ]]; then
+            _MISS_VALIDATION_TEXT=$(echo "$SUMMARY_TEXT" | tail -n +"${_MISS_VA_START}")
+        else
+            _MISS_VALIDATION_TEXT="$SUMMARY_TEXT"
+        fi
+
+        # Run inference criteria — mirrors secondary validation in the AUTOVERIFY path
+        _MISS_PASS=true
+
+        # Must have High confidence
+        if ! echo "$_MISS_VALIDATION_TEXT" | grep -qiE '(\*\*High\*\*|[Cc]onfidence:?\s*High|High confidence)'; then
+            _MISS_PASS=false
+            log_info "POST-TASK" "inference check: missing High confidence — no advisory"
+        fi
+
+        # Must NOT have Partially verified
+        if echo "$_MISS_VALIDATION_TEXT" | grep -qi 'Partially verified'; then
+            _MISS_PASS=false
+            log_info "POST-TASK" "inference check: Partially verified found — no advisory"
+        fi
+
+        # Must NOT have Medium or Low confidence
+        if echo "$_MISS_VALIDATION_TEXT" | grep -qiE '(\*\*(Medium|Low)\*\*|[Cc]onfidence:?\s*(Medium|Low)|(Medium|Low) confidence)'; then
+            _MISS_PASS=false
+            log_info "POST-TASK" "inference check: Medium/Low confidence found — no advisory"
+        fi
+
+        # Must NOT have non-environmental "Not tested" entries
+        _MISS_ENV_PATTERN='requires browser\|requires viewport\|requires screen reader\|requires mobile\|requires physical device\|requires hardware\|requires manual interaction\|requires human interaction\|requires GUI\|requires native app\|requires network'
+        _MISS_NOT_TESTED=$(echo "$_MISS_VALIDATION_TEXT" | grep -iE '(:\s*Not tested|\|\s*Not tested)' || true)
+        if [[ -n "$_MISS_NOT_TESTED" ]]; then
+            _MISS_NON_ENV=$(echo "$_MISS_NOT_TESTED" | grep -iv "$_MISS_ENV_PATTERN" || true)
+            if [[ -n "$_MISS_NON_ENV" ]]; then
+                _MISS_PASS=false
+                log_info "POST-TASK" "inference check: non-environmental Not tested found — no advisory"
+            fi
+        fi
+
+        # Must NOT have actionable Recommended Follow-Up (anything except None/empty)
+        # Extract just the Recommended Follow-Up section to avoid false positives
+        _MISS_FOLLOWUP=$(echo "$_MISS_VALIDATION_TEXT" | grep -A5 -i 'Recommended Follow-Up' | grep -v 'Recommended Follow-Up' | grep -v '^$' | grep -v '^---' || true)
+        if [[ -n "$_MISS_FOLLOWUP" ]]; then
+            if ! echo "$_MISS_FOLLOWUP" | grep -qiE '^None$|^-?\s*None\.?$|\|\s*None\s*\|'; then
+                _MISS_PASS=false
+                log_info "POST-TASK" "inference check: actionable Recommended Follow-Up found — no advisory"
+            fi
+        fi
+
+        [[ "$_MISS_PASS" == "true" ]] && _AV_MISS=true
+    fi
+
+    if [[ "$_AV_MISS" == "true" ]]; then
+        log_info "POST-TASK" "AUTOVERIFY EXPECTED: High-confidence full-coverage assessment missing AUTOVERIFY: CLEAN signal"
+        append_audit "$PROJECT_ROOT" "autoverify_expected_missing" \
+            "High-confidence assessment meets all auto-verify criteria but AUTOVERIFY: CLEAN signal was not emitted"
+
+        _MISS_ESCAPED=$(printf '%s' \
+            'AUTOVERIFY EXPECTED: Tester wrote High confidence with full coverage but omitted AUTOVERIFY: CLEAN signal. The assessment objectively meets all auto-verify criteria. Dispatch Guardian with INFER-VERIFY in the prompt to enable inference-based approval, or approve manually.' \
+            | jq -Rs .)
+        cat <<EOF
+{
+  "additionalContext": $_MISS_ESCAPED
+}
+EOF
+        exit 0
+    fi
+
+    log_info "POST-TASK" "inference check: criteria not met — running completeness check"
 
     # --- Completeness gate (adapted from check-tester.sh DEC-TESTER-002) ---
     # In PostToolUse, exit 2 doesn't block — Task already completed.

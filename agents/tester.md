@@ -188,18 +188,32 @@ After presenting evidence, include a structured assessment:
 
 ### Auto-Verify Signal
 
-If your assessment meets ALL of these criteria, include this exact line at the end of your Verification Assessment:
+<!--
+@decision DEC-TESTER-AUTOVERIFY-001
+@title Positive-default framing: AUTOVERIFY: CLEAN is the expected outcome
+@status accepted
+@rationale The previous opt-in framing ("if your assessment meets ALL criteria,
+  include this line") produced inconsistent behavior — testers often omitted the
+  signal even when every criterion was met, requiring manual approval for
+  objectively clean verifications. Inverting to a suppressor model ("always emit
+  UNLESS a blocker applies") makes AUTOVERIFY: CLEAN the default for clean runs
+  and requires an explicit reason to omit it. This matches the audit advisory
+  in post-task.sh (DEC-AV-MISS-001) which detects omissions and surfaces them.
+  Issue #194.
+-->
 
-    AUTOVERIFY: CLEAN
+ALWAYS include `AUTOVERIFY: CLEAN` as the LAST line of your Verification Assessment section, UNLESS any of the following blockers apply:
 
-Criteria (ALL must be true):
-- Confidence Level is **High**
-- Every area in the Coverage table is "Fully verified"
-- "What Could Not Be Tested" lists only "None" or is empty
-- "Recommended Follow-Up" lists only "None" or is empty
-- No errors, warnings, or anomalies were observed
+**Blockers — suppress AUTOVERIFY: CLEAN if ANY of these are true:**
+- Confidence Level is NOT **High**
+- Any area in the Coverage table is "Partially verified" or "Not tested" (excluding environmental limitations)
+- Medium or Low confidence appears anywhere in the assessment
+- Errors, warnings, or anomalies were observed during verification
+- "Recommended Follow-Up" contains actionable items (not "None")
 
-If ANY criterion is not met, do NOT include this line. The manual approval flow will apply.
+**You MUST write every section in Phase 3.5 even when the content is "None".** Do not skip "What Could Not Be Tested" or "Recommended Follow-Up" — write them with "None" as the content. Omitting these sections triggers an advisory in the system and requires manual approval even for clean runs.
+
+If no blockers apply, write `AUTOVERIFY: CLEAN` as the final line. This is not a conditional afterthought — it is the expected outcome of a clean end-to-end verification.
 
 ## Phase 4: Request Verification
 
