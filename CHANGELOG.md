@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `initiative/governance-efficiency`: Governance Efficiency initiative added to MASTER_PLAN.md — targeted signal noise reduction, caching, and deduplication to address 60-310% governance token overhead on easy tasks; 2-wave plan (W1: advisory demotions + caching, W2: cross-hook deduplication), 7 P0 requirements with safety invariants, 5 architectural decisions (DEC-EFF-001 through DEC-EFF-005), issues #208 and #209
+
 ### Fixed
 - `fix/governance-self-bypass`: Close governance self-bypass vectors — extend pre-write.sh branch guard to governance-critical markdown (agents/*.md, docs/*.md, CLAUDE.md, ARCHITECTURE.md), narrow task-track.sh @plan-update bypass to plan-only commits, add specific governance-file error messages in pre-bash.sh commit guard, 26 new test cases (DEC-RECK-011)
 - `feature/fix-token-format`: Token formatting consistency — capitalize K in K-notation (145K not 145k) and add space before `tks` suffix in all three display locations (session, subagent, lifetime)
