@@ -36,8 +36,22 @@ _SESSION_LIB_VERSION=1
 # Plan phase and test status removed: statusline now sources those from stdin JSON.
 write_statusline_cache() {
     local root="$1"
-    local cache_file="$root/.claude/.statusline-cache-${CLAUDE_SESSION_ID:-$$}"
-    mkdir -p "$root/.claude"
+    # @decision DEC-DOUBLE-NEST-FIX-001
+    # @title write_statusline_cache: use double-nesting guard same as get_claude_dir()
+    # @status accepted
+    # @rationale When root is ~/.claude (the meta-project), appending "/.claude" produces
+    #   ~/.claude/.claude/ — a double-nested path. The fix mirrors get_claude_dir() in log.sh:
+    #   if root IS ~/.claude, use root directly; otherwise append .claude. This ensures cache
+    #   files land where statusline.sh and other consumers look for them.
+    local home_claude="${HOME}/.claude"
+    local _cache_dir
+    if [[ "${root%/}" == "${home_claude%/}" ]]; then
+        _cache_dir="$root"
+    else
+        _cache_dir="$root/.claude"
+    fi
+    local cache_file="${_cache_dir}/.statusline-cache-${CLAUDE_SESSION_ID:-$$}"
+    mkdir -p "$_cache_dir"
 
     # Subagent status (populates SUBAGENT_* globals)
     get_subagent_status "$root"
@@ -73,7 +87,7 @@ write_statusline_cache() {
     #   the caller always wins; sibling only fills in when both are zero/unset.
     if (( _prev_lifetime_tokens == 0 )) && (( $(echo "${_prev_lifetime_cost:-0} == 0" | bc -l 2>/dev/null || echo 1) )); then
         local _any_cache
-        _any_cache=$(ls -t "${root}/.claude/.statusline-cache-"* 2>/dev/null | head -1 || true)
+        _any_cache=$(ls -t "${_cache_dir}/.statusline-cache-"* 2>/dev/null | head -1 || true)
         if [[ -n "$_any_cache" && -f "$_any_cache" && "$_any_cache" != "$cache_file" ]]; then
             local _sib_tokens _sib_cost
             _sib_tokens=$(jq -r '.lifetime_tokens // 0' "$_any_cache" 2>/dev/null || echo 0)
