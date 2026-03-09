@@ -539,21 +539,28 @@ compress_initiative() {
 
 # --- Plan state cache ---
 # @decision DEC-EFF-013
-# @title Shared plan state cache across hooks (10s TTL)
+# @title Shared plan state cache across hooks (10s TTL), full PLAN_* variable set
 # @status accepted
 # @rationale Plan status is computed by 5 hooks per event cycle. MASTER_PLAN.md
-#   parsing is expensive (~100ms). 10-second TTL eliminates redundant parsing
-#   within event cycles. Plan changes are user-driven and infrequent.
+#   parsing is expensive (~100ms, 10+ grep+awk passes). 10-second TTL eliminates
+#   redundant parsing within event cycles. Plan changes are user-driven and infrequent.
 #   Safety invariant: Plan gates (Gate 2 in pre-write.sh) read cached state.
 #   If plan changes mid-event (extremely unlikely), cache expires in 10s.
 #   No deny gate is weakened — they still fire on the same conditions.
+#   Full variable set cached (not just PLAN_EXISTS): session-init.sh, prompt-submit.sh,
+#   compact-preserve.sh, check-guardian.sh all consume PLAN_COMPLETED_PHASES,
+#   PLAN_TOTAL_PHASES, PLAN_AGE_DAYS, PLAN_SOURCE_CHURN_PCT, PLAN_PHASE. Restoring
+#   only 3 vars on cache hit would silently break these callers with default-zero values.
+#   Caching the full set ensures cache hits are always substitutable for fresh calls.
 #   Cache file: CLAUDE_DIR/.plan-state-cache (key=value format, no SID suffix —
 #   shared across hooks within a single session; cleaned by session-end.sh).
-#   Fallback: if cache read fails for any reason, falls back to fresh computation.
+#   Fallback: if cache read fails or validation fails, falls back to fresh computation.
 #
 # _cached_plan_state ROOT [CLAUDE_DIR]
-#   Populates PLAN_EXISTS, PLAN_ACTIVE_INITIATIVES, PLAN_LIFECYCLE, and all
-#   other PLAN_* globals (via get_plan_status on cache miss).
+#   Populates all PLAN_* globals (PLAN_EXISTS, PLAN_LIFECYCLE, PLAN_ACTIVE_INITIATIVES,
+#   PLAN_TOTAL_PHASES, PLAN_COMPLETED_PHASES, PLAN_AGE_DAYS, PLAN_SOURCE_CHURN_PCT,
+#   PLAN_PHASE, PLAN_IN_PROGRESS_PHASES, PLAN_REQ_COUNT, PLAN_P0_COUNT, PLAN_NOGO_COUNT,
+#   PLAN_TOTAL_INITIATIVES, PLAN_ACTIVE_INITIATIVE_NAME, PLAN_IN_PROGRESS_PHASE).
 #   CLAUDE_DIR defaults to ROOT/.claude when not provided.
 _cached_plan_state() {
     local root="$1"
@@ -561,10 +568,25 @@ _cached_plan_state() {
     local cache_file="$claude_dir/.plan-state-cache"
     local cache_ttl=10  # seconds — plan changes are user-driven, infrequent
 
-    # Initialize defaults (safe if cache or computation fails)
+    # Initialize all PLAN_* defaults (mirrors get_plan_status() initialization)
     PLAN_EXISTS=false
+    PLAN_PHASE=""
+    PLAN_TOTAL_PHASES=0
+    PLAN_COMPLETED_PHASES=0
+    PLAN_IN_PROGRESS_PHASES=0
     PLAN_ACTIVE_INITIATIVES=0
+    PLAN_TOTAL_INITIATIVES=0
+    PLAN_AGE_DAYS=0
+    PLAN_COMMITS_SINCE=0
+    PLAN_CHANGED_SOURCE_FILES=0
+    PLAN_TOTAL_SOURCE_FILES=0
+    PLAN_SOURCE_CHURN_PCT=0
+    PLAN_REQ_COUNT=0
+    PLAN_P0_COUNT=0
+    PLAN_NOGO_COUNT=0
     PLAN_LIFECYCLE="none"
+    PLAN_ACTIVE_INITIATIVE_NAME=""
+    PLAN_IN_PROGRESS_PHASE=""
 
     # --- Cache hit check ---
     if [[ -f "$cache_file" ]]; then
@@ -574,34 +596,53 @@ _cached_plan_state() {
         cache_age=$(( now_epoch - cache_mtime ))
 
         if [[ "$cache_age" -le "$cache_ttl" ]]; then
-            # Cache hit — read values
-            local _exists _active _lifecycle
+            # Cache hit — restore all cached values via shell source
+            # Use a temp var to hold the _exists check before sourcing the full file
+            local _exists
             _exists=$(grep '^PLAN_EXISTS=' "$cache_file" 2>/dev/null | cut -d= -f2 || echo "")
-            _active=$(grep '^PLAN_ACTIVE_INITIATIVES=' "$cache_file" 2>/dev/null | cut -d= -f2 || echo "0")
-            _lifecycle=$(grep '^PLAN_LIFECYCLE=' "$cache_file" 2>/dev/null | cut -d= -f2- || echo "none")
 
-            # Validate: _exists must be "true" or "false"
+            # Validate: _exists must be "true" or "false" (guards against corrupt files)
             if [[ "$_exists" == "true" || "$_exists" == "false" ]]; then
-                PLAN_EXISTS="$_exists"
-                PLAN_ACTIVE_INITIATIVES="${_active:-0}"
-                PLAN_LIFECYCLE="${_lifecycle:-none}"
-                return 0
+                # Source the cache file to restore all PLAN_* variables at once.
+                # Safe: cache file contains only PLAN_*=value lines (written by this function).
+                # shellcheck disable=SC1090
+                source "$cache_file" 2>/dev/null && return 0
             fi
-            # Invalid cache → fall through to fresh computation
+            # Corrupt or invalid cache → fall through to fresh computation
         fi
     fi
 
     # --- Cache miss: compute fresh state ---
     get_plan_status "$root"
 
-    # Write cache (atomic: write to tmp then move)
+    # Write cache (atomic: write to tmp then move).
+    # Store the full set of PLAN_* variables that consumers need.
+    # Use printf '%q' (shell quoting) for string values that may contain spaces
+    # (e.g., PLAN_ACTIVE_INITIATIVE_NAME="Governor Subagent"). Without quoting,
+    # `source` would interpret "Governor Subagent" as a command, failing under set -e.
+    # Numeric-only variables use %s since they cannot contain spaces.
     mkdir -p "$claude_dir" 2>/dev/null || true
     local tmp_cache
     tmp_cache="${cache_file}.tmp.$$"
     {
-        printf 'PLAN_EXISTS=%s\n' "${PLAN_EXISTS:-false}"
-        printf 'PLAN_ACTIVE_INITIATIVES=%s\n' "${PLAN_ACTIVE_INITIATIVES:-0}"
-        printf 'PLAN_LIFECYCLE=%s\n' "${PLAN_LIFECYCLE:-none}"
+        printf 'PLAN_EXISTS=%s\n'               "${PLAN_EXISTS:-false}"
+        printf 'PLAN_PHASE=%q\n'                "${PLAN_PHASE:-}"
+        printf 'PLAN_TOTAL_PHASES=%s\n'         "${PLAN_TOTAL_PHASES:-0}"
+        printf 'PLAN_COMPLETED_PHASES=%s\n'     "${PLAN_COMPLETED_PHASES:-0}"
+        printf 'PLAN_IN_PROGRESS_PHASES=%s\n'   "${PLAN_IN_PROGRESS_PHASES:-0}"
+        printf 'PLAN_ACTIVE_INITIATIVES=%s\n'   "${PLAN_ACTIVE_INITIATIVES:-0}"
+        printf 'PLAN_TOTAL_INITIATIVES=%s\n'    "${PLAN_TOTAL_INITIATIVES:-0}"
+        printf 'PLAN_AGE_DAYS=%s\n'             "${PLAN_AGE_DAYS:-0}"
+        printf 'PLAN_COMMITS_SINCE=%s\n'        "${PLAN_COMMITS_SINCE:-0}"
+        printf 'PLAN_CHANGED_SOURCE_FILES=%s\n' "${PLAN_CHANGED_SOURCE_FILES:-0}"
+        printf 'PLAN_TOTAL_SOURCE_FILES=%s\n'   "${PLAN_TOTAL_SOURCE_FILES:-0}"
+        printf 'PLAN_SOURCE_CHURN_PCT=%s\n'     "${PLAN_SOURCE_CHURN_PCT:-0}"
+        printf 'PLAN_REQ_COUNT=%s\n'            "${PLAN_REQ_COUNT:-0}"
+        printf 'PLAN_P0_COUNT=%s\n'             "${PLAN_P0_COUNT:-0}"
+        printf 'PLAN_NOGO_COUNT=%s\n'           "${PLAN_NOGO_COUNT:-0}"
+        printf 'PLAN_LIFECYCLE=%q\n'            "${PLAN_LIFECYCLE:-none}"
+        printf 'PLAN_ACTIVE_INITIATIVE_NAME=%q\n' "${PLAN_ACTIVE_INITIATIVE_NAME:-}"
+        printf 'PLAN_IN_PROGRESS_PHASE=%q\n'    "${PLAN_IN_PROGRESS_PHASE:-}"
     } > "$tmp_cache" 2>/dev/null && mv "$tmp_cache" "$cache_file" 2>/dev/null || \
         rm -f "$tmp_cache" 2>/dev/null || true
 }

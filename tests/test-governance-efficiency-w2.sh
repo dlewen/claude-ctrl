@@ -387,7 +387,8 @@ run_test "9. Cache file format contains all expected keys"
         fi
     done
 
-    for key in PLAN_EXISTS PLAN_ACTIVE_INITIATIVES; do
+    # Check full set of PLAN_* vars that consumer hooks depend on
+    for key in PLAN_EXISTS PLAN_ACTIVE_INITIATIVES PLAN_LIFECYCLE PLAN_TOTAL_PHASES PLAN_COMPLETED_PHASES PLAN_AGE_DAYS PLAN_SOURCE_CHURN_PCT; do
         if ! grep -q "^${key}=" "$CLAUDE_DIR/.plan-state-cache" 2>/dev/null; then
             echo "  plan cache missing key: $key"
             PLAN_OK=false
@@ -401,6 +402,46 @@ run_test "9. Cache file format contains all expected keys"
         exit 1
     fi
 ) && pass_test || fail_test "Cache file missing expected keys"
+
+# ---------------------------------------------------------------------------
+# Test 9b: Cache hit restores the full PLAN_* variable set (not just 3 vars)
+# ---------------------------------------------------------------------------
+run_test "9b. Cache hit restores PLAN_TOTAL_PHASES, PLAN_COMPLETED_PHASES, PLAN_LIFECYCLE"
+(
+    CLAUDE_DIR=$(mktemp -d "$PROJECT_ROOT/tmp/test-w2-XXXXXX")
+    CLEANUP_DIRS+=("$CLAUDE_DIR")
+
+    _load_libs "$HOOKS_DIR"
+
+    rm -f "$CLAUDE_DIR/.plan-state-cache"
+
+    # First call — populates cache with all PLAN_* vars
+    _cached_plan_state "$PROJECT_ROOT" "$CLAUDE_DIR"
+    LIFECYCLE_FRESH="$PLAN_LIFECYCLE"
+    TOTAL_PHASES_FRESH="$PLAN_TOTAL_PHASES"
+    COMPLETED_FRESH="$PLAN_COMPLETED_PHASES"
+
+    # Reset the vars to detect whether the cache hit restores them
+    PLAN_LIFECYCLE=""
+    PLAN_TOTAL_PHASES=""
+    PLAN_COMPLETED_PHASES=""
+
+    # Second call — must be a cache hit and restore all vars
+    _cached_plan_state "$PROJECT_ROOT" "$CLAUDE_DIR"
+
+    if [[ "$PLAN_LIFECYCLE" == "$LIFECYCLE_FRESH" && \
+          "$PLAN_TOTAL_PHASES" == "$TOTAL_PHASES_FRESH" && \
+          "$PLAN_COMPLETED_PHASES" == "$COMPLETED_FRESH" ]]; then
+        echo "  cache hit restored: lifecycle=$PLAN_LIFECYCLE total_phases=$PLAN_TOTAL_PHASES completed=$PLAN_COMPLETED_PHASES"
+        exit 0
+    else
+        echo "  FAIL: cache hit did not restore full PLAN_* set"
+        echo "  lifecycle: expected='$LIFECYCLE_FRESH' got='$PLAN_LIFECYCLE'"
+        echo "  total_phases: expected='$TOTAL_PHASES_FRESH' got='$PLAN_TOTAL_PHASES'"
+        echo "  completed: expected='$COMPLETED_FRESH' got='$PLAN_COMPLETED_PHASES'"
+        exit 1
+    fi
+) && pass_test || fail_test "Cache hit did not restore full PLAN_* variable set"
 
 # ---------------------------------------------------------------------------
 # Test 10: Corrupt cache file → fallback to fresh computation
@@ -426,6 +467,44 @@ run_test "10. Corrupt .git-state-cache → fallback to fresh computation"
         exit 1
     fi
 ) && pass_test || fail_test "Corrupt cache did not fall back to fresh computation"
+
+# ---------------------------------------------------------------------------
+# Test 10b: Consumer hooks call _cached_git_state (not bare get_git_state)
+# ---------------------------------------------------------------------------
+run_test "10b. Consumer hooks wire _cached_git_state (no bare get_git_state in consumers)"
+(
+    CONSUMER_HOOKS=(
+        "$HOOKS_DIR/session-init.sh"
+        "$HOOKS_DIR/prompt-submit.sh"
+        "$HOOKS_DIR/subagent-start.sh"
+        "$HOOKS_DIR/compact-preserve.sh"
+        "$HOOKS_DIR/check-planner.sh"
+        "$HOOKS_DIR/check-guardian.sh"
+        "$HOOKS_DIR/check-implementer.sh"
+        "$HOOKS_DIR/check-tester.sh"
+    )
+
+    UNWIRED=()
+    for hook in "${CONSUMER_HOOKS[@]}"; do
+        hook_name=$(basename "$hook")
+        # Check that _cached_git_state is called
+        if ! grep -q '_cached_git_state' "$hook" 2>/dev/null; then
+            UNWIRED+=("$hook_name: missing _cached_git_state")
+        fi
+        # Check that _cached_plan_state is called
+        if ! grep -q '_cached_plan_state' "$hook" 2>/dev/null; then
+            UNWIRED+=("$hook_name: missing _cached_plan_state")
+        fi
+    done
+
+    if [[ ${#UNWIRED[@]} -eq 0 ]]; then
+        echo "  all ${#CONSUMER_HOOKS[@]} consumer hooks wired to cached functions"
+        exit 0
+    else
+        printf '  NOT WIRED: %s\n' "${UNWIRED[@]}"
+        exit 1
+    fi
+) && pass_test || fail_test "Consumer hooks not wired to _cached_git_state/_cached_plan_state"
 
 # ---------------------------------------------------------------------------
 # Test 11: DEC-EFF-014 annotation present in governance-signal-map.md
