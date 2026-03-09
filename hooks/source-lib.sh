@@ -290,6 +290,16 @@ require_db_guardian() {
 # (in log.sh and session-lib.sh). Tests call require_state directly.
 # See test-proof-lifecycle.sh:T09 for the test coverage of this loader.
 
+require_db_guardian() {
+    [[ -n "${_DB_GUARDIAN_LIB_LOADED:-}" ]] && return 0
+    source "${_SRCLIB_DIR}/db-guardian-lib.sh"
+}
+# require_db_guardian is called by the DB Guardian agent at the start of every
+# database operation assessment. It loads the policy engine (D3), simulation
+# helpers (D4), and approval gate (D5). This is NOT loaded by pre-bash.sh —
+# it is an agent-layer library, not a hook-layer library.
+# See hooks/db-guardian-lib.sh for DEC-DBGUARD-001 (separation rationale).
+
 # verify_library_consistency
 #   Checks that all loaded library versions match the expected version.
 #   Returns 0 if all consistent, 1 if mismatches found.
