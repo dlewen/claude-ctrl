@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `feature/fix-token-format`: Token formatting consistency — capitalize K in K-notation (145K not 145k) and add space before `tks` suffix in all three display locations (session, subagent, lifetime)
+
 ### Changed
 - `housekeeping/plan-maintenance`: MASTER_PLAN.md housekeeping batch — close Prompt Purpose Restoration and Governance Signal Audit initiatives (moved to Completed with narratives), add RSM completed summary, fix Created date and architecture counts, add 15 Decision Log entries (DEC-RECK-010 through DEC-RECK-016 and others)
 - `worktree-agent-a9bc4dc5`: Statusline aesthetic + cache discovery — system blocks changed from ▓ to █ with dim color for cleaner visuals, cache discovery fallback finds most recent `.statusline-cache-*` when CLAUDE_SESSION_ID unavailable (DEC-DUALBAR-004), core-lib.sh `is_protected_state_file()` non-dot patterns use exact match to prevent false positives
