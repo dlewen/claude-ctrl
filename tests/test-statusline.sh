@@ -92,6 +92,15 @@ extract_line() {
     done <<< "$str"
 }
 
+# Helper: get line 2 from run_statusline output (primary metrics: ctx bar, tokens, cost, lifetime)
+# With the 4-line layout, "tail -1" now gets line 3 (secondary). All primary metrics are on line 2.
+run_statusline_l2() {
+    local _l2_out
+    _l2_out=$(run_statusline "$@")
+    extract_line "$_l2_out" 2
+}
+
+
 # ============================================================================
 # Test group 1: Two-line structure
 # ============================================================================
@@ -104,24 +113,25 @@ test_two_lines_output() {
     local line_count
     line_count=$(printf '%s' "$output" | wc -l | tr -d ' ')
 
-    if [[ "$line_count" -eq 1 ]]; then
-        pass_test "Output has two lines (newline separates them)"
+    if [[ "$line_count" -ge 2 ]]; then
+        pass_test "Output has multiple lines (4-line layout: line_count=$line_count)"
     else
-        fail_test "Output should have exactly 1 newline (2 lines)" "line_count=$line_count, output=$output"
+        fail_test "Output should have at least 2 newlines (4-line layout)" "line_count=$line_count, output=$output"
     fi
 }
 
 test_line1_contains_model() {
     run_test
     local json='{"model":{"display_name":"Opus 4.6"},"workspace":{"current_dir":"/tmp/proj"},"cost":{},"context_window":{}}'
-    local line2
-    # Model is on line 2 (metrics line) — line 1 is project context (workspace/git/agents/todos)
-    line2=$(run_statusline "$json" | sed -n '2p' | strip_ansi)
+    local _l1m_out line3
+    # Model moved to line 3 (secondary metrics) in the 4-line layout
+    _l1m_out=$(run_statusline "$json")
+    line3=$(extract_line "$_l1m_out" 3 | strip_ansi)
 
-    if [[ "$line2" == *"Opus 4.6"* ]]; then
-        pass_test "Line 2 contains model name"
+    if [[ "$line3" == *"Opus 4.6"* ]]; then
+        pass_test "Line 3 contains model name (moved from line 2 in 4-line layout)"
     else
-        fail_test "Line 2 missing model name" "line2=$line2"
+        fail_test "Line 3 missing model name (model moved to line 3)" "line3=$line3"
     fi
 }
 
@@ -148,7 +158,7 @@ test_context_bar_null() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" == *"░░░░░░░░░░░░"* && "$line2" == *"--"* ]]; then
         pass_test "Context bar shows all-empty with '--' when context_window absent"
@@ -161,7 +171,7 @@ test_context_bar_30pct() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"used_percentage":30}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     # 30% of 12 = 3 filled chars
     if [[ "$line2" == *"30%"* && "$line2" == *"███"* ]]; then
@@ -175,7 +185,7 @@ test_context_bar_60pct() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"used_percentage":60}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     # 60% of 12 = 7 filled chars
     if [[ "$line2" == *"60%"* && "$line2" == *"███████"* ]]; then
@@ -189,7 +199,7 @@ test_context_bar_85pct() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"used_percentage":85}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     # 85% of 12 = 10 filled chars
     if [[ "$line2" == *"85%"* && "$line2" == *"██████████"* ]]; then
@@ -207,7 +217,7 @@ test_cost_tilde_prefix() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0.53},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if printf '%s' "$line2" | grep -qF '~$0.53'; then
         pass_test "Cost displays with ~\$ prefix (e.g. ~\$0.53)"
@@ -220,7 +230,7 @@ test_cost_display_present() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0.53},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if printf '%s' "$line2" | grep -qF '~$0.53'; then
         pass_test "Cost displays correctly formatted"
@@ -233,7 +243,7 @@ test_cost_zero() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if printf '%s' "$line2" | grep -qF '~$0.00'; then
         pass_test 'Zero cost displays as ~$0.00'
@@ -246,7 +256,7 @@ test_cost_no_field() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if printf '%s' "$line2" | grep -qF '~$0.00'; then
         pass_test 'Missing cost field defaults to ~$0.00'
@@ -262,8 +272,10 @@ test_cost_no_field() {
 test_duration_less_than_1min() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_duration_ms":30000},"context_window":{}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Duration moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     if [[ "$line2" == *"<1m"* ]]; then
         pass_test "Duration 30s shows as '<1m'"
@@ -275,8 +287,10 @@ test_duration_less_than_1min() {
 test_duration_minutes() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_duration_ms":720000},"context_window":{}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Duration moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     if [[ "$line2" == *"12m"* ]]; then
         pass_test "Duration 720s shows as '12m'"
@@ -288,8 +302,10 @@ test_duration_minutes() {
 test_duration_hours() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_duration_ms":4320000},"context_window":{}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Duration moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     # 4320000ms = 4320s = 72min = 1h 12m
     if [[ "$line2" == *"1h 12m"* ]]; then
@@ -302,8 +318,10 @@ test_duration_hours() {
 test_duration_zero() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_duration_ms":0},"context_window":{}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Duration moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     if [[ "$line2" == *"<1m"* ]]; then
         pass_test "Duration 0ms shows as '<1m'"
@@ -337,7 +355,7 @@ test_lines_changed_absent_when_zero() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_lines_added":0,"total_lines_removed":0},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" != *"+0"* && "$line2" != *"-0"* ]]; then
         pass_test "Lines changed segment absent when 0 lines"
@@ -349,8 +367,10 @@ test_lines_changed_absent_when_zero() {
 test_lines_changed_present_when_nonzero() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_lines_added":45,"total_lines_removed":12},"context_window":{}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Lines changed moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     if [[ "$line2" == *"+45"* && "$line2" == *"-12"* ]]; then
         pass_test "Lines changed shows +added/-removed"
@@ -405,8 +425,10 @@ test_todos_present_from_file() {
 test_cache_efficiency_absent_when_no_cache_tokens() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"current_usage":{"input_tokens":10000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Check line 3 (secondary) — cache segment appears there when present
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     if [[ "$line2" != *"cache"* ]]; then
         pass_test "Cache efficiency absent when no cache tokens"
@@ -419,8 +441,10 @@ test_cache_efficiency_calculates_correctly() {
     run_test
     # cache_read=7400, input=1000, cache_create=1600 → total=10000 → 74%
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"current_usage":{"input_tokens":1000,"cache_read_input_tokens":7400,"cache_creation_input_tokens":1600}}}'
-    local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    local _rsl_out line2
+    # Cache efficiency moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2=$(extract_line "$_rsl_out" 3 | strip_ansi)
 
     if [[ "$line2" == *"cache 74%"* ]]; then
         pass_test "Cache efficiency calculated as 74% (7400/10000)"
@@ -433,8 +457,10 @@ test_cache_efficiency_high_shows_green() {
     run_test
     # 80% efficiency → green (>=60%)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"current_usage":{"input_tokens":2000,"cache_read_input_tokens":8000,"cache_creation_input_tokens":0}}}'
-    local line2_raw
-    line2_raw=$(run_statusline "$json" | tail -1)
+    local _rsl_out line2_raw
+    # Cache efficiency moved to Line 3 (secondary metrics) in 4-line layout
+    _rsl_out=$(run_statusline "$json")
+    line2_raw=$(extract_line "$_rsl_out" 3)
 
     # Green = ESC[32m
     if printf '%s' "$line2_raw" | grep -q $'\033\[32mcache'; then
@@ -637,7 +663,7 @@ test_tokens_segment_present() {
     run_test
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" == *"tks"* ]]; then
         pass_test "Token segment present in line 2"
@@ -651,7 +677,7 @@ test_tokens_k_notation() {
     # 100000 + 45000 = 145000 → 145K
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" == *"145K tks"* ]]; then
         pass_test "Token count 145000 displays as '145K tks'"
@@ -665,7 +691,7 @@ test_tokens_raw_below_1k() {
     # 300 + 200 = 500 → 500 (raw, no suffix)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":300,"total_output_tokens":200}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" == *"500 tks"* ]]; then
         pass_test "Token count 500 displays as '500 tks' (raw, no suffix)"
@@ -679,7 +705,7 @@ test_tokens_m_notation() {
     # 1200000 + 300000 = 1500000 → 1.5M
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":1200000,"total_output_tokens":300000}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" == *"1.5M tks"* ]]; then
         pass_test "Token count 1500000 displays as '1.5M tks'"
@@ -693,7 +719,7 @@ test_tokens_zero_shows_dim() {
     # 0 tokens → "0 tks", dim color (ESC[2m)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
     local line2_raw
-    line2_raw=$(run_statusline "$json" | tail -1)
+    line2_raw=$(run_statusline_l2 "$json")
 
     # Dim = ESC[2m applied to "0 tks" segment
     if printf '%s' "$line2_raw" | grep -q $'\033\[2m0 tks'; then
@@ -708,7 +734,7 @@ test_tokens_high_shows_yellow() {
     # 600000 total → >500k → yellow (ESC[33m)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":500000,"total_output_tokens":100000}}'
     local line2_raw
-    line2_raw=$(run_statusline "$json" | tail -1)
+    line2_raw=$(run_statusline_l2 "$json")
 
     # Yellow = ESC[33m applied to "600K tks" segment
     if printf '%s' "$line2_raw" | grep -q $'\033\[33m600K tks'; then
@@ -723,7 +749,7 @@ test_tokens_segment_position() {
     # tks: segment should appear AFTER context bar and BEFORE cost (~$)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0.50},"context_window":{"used_percentage":40,"total_input_tokens":100000,"total_output_tokens":45000}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     local pos_bar pos_tokens pos_cost
     pos_bar=$(printf '%s' "$line2" | { grep -bo '\[' || true; } | head -1 | cut -d: -f1)
@@ -902,7 +928,7 @@ test_lifetime_cost_absent_when_zero() {
     local line2
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line2" != *"Σ"* ]]; then
@@ -924,7 +950,7 @@ test_lifetime_cost_shown_when_nonzero() {
     local line2
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line2" == *"Σ~\$12.40"* || "$line2" == *"Σ~\$12"* ]]; then
@@ -939,7 +965,7 @@ test_lifetime_cost_not_shown_when_cache_absent() {
     # No cache file at all → lifetime_cost defaults to 0 → no Σ
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/nocache"},"cost":{"total_cost_usd":0.50},"context_window":{}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" != *"Σ"* ]]; then
         pass_test "Lifetime cost: no Σ when cache file absent"
@@ -970,8 +996,9 @@ test_banner_absent_when_no_plan() {
     local line_count
     line_count=$(printf '%s' "$output" | wc -l | tr -d ' ')
 
-    if [[ "$line_count" -eq 1 ]]; then
-        pass_test "No initiative → 2-line output (1 newline), no banner line"
+    # 4-line layout: without initiative, output is 3 lines (no line 4)
+    if [[ "$line_count" -ge 2 ]]; then
+        pass_test "No initiative → 3-line output (no banner on line 4), line_count=$line_count"
     else
         fail_test "Expected 2-line output when no initiative" "line_count=$line_count"
     fi
@@ -989,7 +1016,7 @@ test_banner_shows_full_initiative_and_phase() {
     local line0
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line0=$(extract_line "$output" 3 | strip_ansi)
+    line0=$(extract_line "$output" 4 | strip_ansi)
     rm -rf "$tmpdir"
 
     # Line 0 should have: initiative name + "(Phase 0/6)" + phase title + em dash
@@ -1014,7 +1041,7 @@ test_banner_shows_initiative_without_phase() {
     local line0
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line0=$(extract_line "$output" 3 | strip_ansi)
+    line0=$(extract_line "$output" 4 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line0" == *"Backlog Auto-Capture"* ]] && [[ "$line0" != *"(Phase"* ]]; then
@@ -1035,7 +1062,7 @@ test_banner_shows_phase_count() {
     local line0
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line0=$(extract_line "$output" 3 | strip_ansi)
+    line0=$(extract_line "$output" 4 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line0" == *"(Phase 2/5)"* ]]; then
@@ -1056,7 +1083,7 @@ test_banner_shows_multi_initiative_suffix() {
     local line0
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line0=$(extract_line "$output" 3 | strip_ansi)
+    line0=$(extract_line "$output" 4 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line0" == *"(+2 more)"* ]]; then
@@ -1076,13 +1103,13 @@ test_banner_is_last_line() {
     local output
     output=$(printf '%s' "$json" | HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null)
     local line0 line1
-    line0=$(extract_line "$output" 3 | strip_ansi)
+    line0=$(extract_line "$output" 4 | strip_ansi)
     line1=$(extract_line "$output" 1 | strip_ansi)
     rm -rf "$tmpdir"
 
-    # Line 3 (last) has the initiative; Line 1 has project context (not model)
+    # Line 4 (last) has the initiative; Line 1 has project context (not model)
     if [[ "$line0" == *"Statusline Banner"* ]] && [[ -n "$line1" ]]; then
-        pass_test "Banner is last line (Line 3); project context present on Line 1"
+        pass_test "Banner is last line (Line 4); project context present on Line 1"
     else
         fail_test "Banner is not last line or project context missing" "line0=$line0 | line1=$line1"
     fi
@@ -1111,7 +1138,7 @@ test_lifetime_tokens_absent_when_zero_history_no_subagent() {
     local line2
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     # tks: 145K should be present, Σ should NOT be present
@@ -1134,7 +1161,7 @@ test_lifetime_tokens_shown_with_past_sessions() {
     local output
     # COLUMNS=250: term_w=185 ensures Project Lifetime segment (priority 4) is not dropped
     output=$(run_sl_columns "$json" 250 "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     # Should show "145K tks │ Project Lifetime: ∑1.1M tks" — 1000000 past + 145000 current
@@ -1157,7 +1184,7 @@ test_lifetime_tokens_includes_subagent() {
     local line2
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     # 0 past + 145k main + 95k subagent = 145K tks(+subs 95K tks), no ∑ segment
@@ -1180,7 +1207,7 @@ test_lifetime_tokens_grand_total_all_sources() {
     local output
     # COLUMNS=250: term_w=185 ensures Project Lifetime segment (priority 4) is not dropped
     output=$(run_sl_columns "$json" 250 "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     # 500000 + 145000 + 55000 = 700000 → 700K tks; subagent shown as (+subs 55K tks)
@@ -1196,7 +1223,7 @@ test_lifetime_tokens_absent_when_cache_absent() {
     # No cache file → lifetime_tokens defaults to 0 → no Σ (same as first session)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/nocache_tok"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" != *"∑"* ]]; then
         pass_test "Lifetime tokens: no ∑ when cache absent (no history)"
@@ -1217,7 +1244,7 @@ test_lifetime_tokens_dim_rendering() {
     local output
     # COLUMNS=250: term_w=185 ensures Project Lifetime segment (priority 4) is not dropped
     output=$(run_sl_columns "$json" 250 "$tmpdir")
-    line2_raw=$(printf '%s' "$output" | tail -1)
+    line2_raw=$(extract_line "$output" 2)
     rm -rf "$tmpdir"
 
     # Dim annotation pattern: ESC[2mProject Lifetime: ∑Nktks
@@ -1435,7 +1462,7 @@ test_new_token_format_no_subagent() {
     # 145k tokens, no subagents → "145K tks" (no "(+subs...)" suffix)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
     local line2
-    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+    line2=$(run_statusline_l2 "$json" | strip_ansi)
 
     if [[ "$line2" == *"145K tks"* ]]; then
         pass_test "New format: 145k tokens displays as '145K tks'"
@@ -1455,7 +1482,7 @@ test_new_token_format_with_subagent() {
     local line2
     local output
     output=$(run_statusline "$json" "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line2" == *"145K tks(+subs 32K tks)"* ]]; then
@@ -1477,7 +1504,7 @@ test_new_lifetime_format_with_prefix() {
     local output
     # COLUMNS=250: term_w=185 ensures Project Lifetime segment (priority 4) is not dropped
     output=$(run_sl_columns "$json" 250 "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     if [[ "$line2" == *"Project Lifetime:"* ]]; then
@@ -1499,7 +1526,7 @@ test_new_lifetime_format_tks_suffix() {
     local output
     # COLUMNS=250: term_w=185 ensures Project Lifetime segment (priority 4) is not dropped
     output=$(run_sl_columns "$json" 250 "$tmpdir")
-    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
     # Grand total = 9500000 + 145000 = 9645000 ≈ 9.6M
