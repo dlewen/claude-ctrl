@@ -83,9 +83,10 @@ cp "$HISTORY_FILE" "$BACKUP_FILE"
 echo "Backup created: $BACKUP_FILE"
 
 # Load trace index into arrays for fast lookup
-# Arrays: trace_epoch[] trace_project_name[]
+# Arrays: trace_epoch[] trace_project_name[] trace_session_ids[]
 declare -a trace_epochs=()
 declare -a trace_project_names=()
+declare -a trace_session_ids=()
 
 # @decision DEC-BACKFILL-TRACE-LOAD-001
 # @title Use single python3 call for bulk trace index loading and epoch conversion
@@ -93,15 +94,16 @@ declare -a trace_project_names=()
 # @rationale traces/index.jsonl can have 2000+ entries. Spawning per-line subprocesses
 # (python3 or date) takes O(N) subprocesses — ~2000 * 30ms = 60+ seconds. A single
 # python3 call processes the entire JSONL file, converts all timestamps to epochs, and
-# outputs tab-delimited (epoch, project_name) pairs that bash reads in one loop pass.
-# This reduces >60s load time to <1s for 2000 entries. Falls back gracefully if
-# python3 or jq is unavailable.
+# outputs tab-delimited (epoch, project_name, session_id) triples that bash reads in
+# one loop pass. This reduces >60s load time to <1s for 2000 entries. Falls back
+# gracefully if python3 or jq is unavailable. session_id added for Tier 0 matching.
 if [[ -f "$TRACE_INDEX" ]]; then
     # Single python3 call: read all trace entries, convert timestamps to epochs
-    while IFS=$'\t' read -r _epoch _pname; do
+    while IFS=$'\t' read -r _epoch _pname _sid; do
         [[ "$_epoch" -gt 0 ]] 2>/dev/null || continue
         trace_epochs+=("$_epoch")
         trace_project_names+=("${_pname:-unknown}")
+        trace_session_ids+=("${_sid:-}")
     done < <(python3 - "$TRACE_INDEX" << 'PYEOF'
 import sys, json
 from datetime import datetime, timezone
@@ -116,10 +118,11 @@ with open(index_file, 'r') as f:
             d = json.loads(line)
             started = d.get('started_at', '')
             pname = d.get('project_name', 'unknown') or 'unknown'
+            sid = d.get('session_id', '') or ''
             if started:
                 epoch = int(datetime.strptime(started, '%Y-%m-%dT%H:%M:%SZ')
                             .replace(tzinfo=timezone.utc).timestamp())
-                print(f"{epoch}\t{pname}")
+                print(f"{epoch}\t{pname}\t{sid}")
         except Exception:
             pass
 PYEOF
@@ -155,16 +158,68 @@ while IFS='|' read -r ts total_tok main_tok sub_tok sid rest; do
     best_pname="unknown"
     n_traces=${#trace_epochs[@]}
 
+    # @decision DEC-BACKFILL-NULL-FALLBACK-001
+    # @title Two-tier trace matching: use nearest named trace when closest is "unknown"
+    # @status accepted
+    # @rationale Failed tester dispatches (and some orchestrator sub-agents) always
+    # record null/unknown project_name in the trace index. When a history entry is
+    # closest in time to one of these failed traces, the single-best-match algorithm
+    # assigns "unknown" — even when a real implementer trace 5 minutes away clearly
+    # identifies the project. Fix: track two parallel bests:
+    #   best_diff / best_pname         — absolute closest (any project_name)
+    #   best_named_diff / best_named_pname — closest with a non-"unknown" name
+    # After the loop, if the absolute-closest yields "unknown" AND a named match
+    # is within the window, use the named match. This removes the "unknown" bias
+    # without changing the result when the closest trace already has a real name.
+    # See issue #175.
+    best_named_diff=999999999
+    best_named_pname=""
+
+    # @decision DEC-BACKFILL-SESSION-MATCH-001
+    # @title Session_id exact match as primary backfill strategy
+    # @status accepted
+    # @rationale Timestamp proximity matching is error-prone with concurrent sessions.
+    # Session_id is an exact identifier provided by Claude Code. When both the token
+    # history entry AND a trace share the same session_id, the project attribution
+    # is guaranteed correct. Falls back to two-tier timestamp matching for old entries
+    # where session_id was "unknown" (pre DEC-SESSION-ID-001 data).
+    # Tier 0: exact session_id match (fastest, most reliable)
+    if [[ "$sid" != "unknown" && -n "$sid" && "$n_traces" -gt 0 ]]; then
+        for (( idx=0; idx<n_traces; idx++ )); do
+            if [[ "${trace_session_ids[$idx]}" == "$sid" \
+               && "${trace_project_names[$idx]}" != "unknown" \
+               && -n "${trace_project_names[$idx]}" ]]; then
+                best_pname="${trace_project_names[$idx]}"
+                best_diff=0  # exact match — skip timestamp scan
+                break
+            fi
+        done
+    fi
+
     if [[ "$n_traces" -gt 0 && "$ts_epoch" -gt 0 ]]; then
         for (( idx=0; idx<n_traces; idx++ )); do
             t_epoch="${trace_epochs[$idx]}"
             diff=$(( ts_epoch - t_epoch ))
             (( diff < 0 )) && diff=$(( -diff ))
+            # Tier 1: absolute closest (any project_name, including "unknown")
             if (( diff < best_diff )); then
                 best_diff=$diff
                 best_pname="${trace_project_names[$idx]}"
             fi
+            # Tier 2: closest with a real (non-unknown, non-empty) project_name
+            _pn="${trace_project_names[$idx]}"
+            if [[ "$_pn" != "unknown" && -n "$_pn" ]] && (( diff < best_named_diff )); then
+                best_named_diff=$diff
+                best_named_pname="$_pn"
+            fi
         done
+    fi
+
+    # Apply fallback: if best match is "unknown" and a named match is within the window, use it
+    if [[ "$best_pname" == "unknown" && -n "$best_named_pname" ]] \
+       && (( best_named_diff <= MATCH_WINDOW )); then
+        best_pname="$best_named_pname"
+        best_diff="$best_named_diff"
     fi
 
     if (( best_diff <= MATCH_WINDOW )); then

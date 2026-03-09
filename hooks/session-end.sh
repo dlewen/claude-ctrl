@@ -69,6 +69,15 @@ exec 2>/dev/null
 _SESSION_END_INPUT=$(cat)
 REASON=$(printf '%s' "$_SESSION_END_INPUT" | jq -r '.reason // "unknown"' 2>/dev/null || echo "unknown")
 
+# Extract session_id from hook input (mirrors DEC-SESSION-ID-001 in log.sh)
+# session-end.sh does NOT use read_input() — it captures stdin directly above.
+# Repeat the extraction here so CLAUDE_SESSION_ID is available for archive naming
+# and subagent tracker cleanup below.
+if [[ -z "${CLAUDE_SESSION_ID:-}" ]]; then
+    CLAUDE_SESSION_ID=$(printf '%s' "$_SESSION_END_INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+    export CLAUDE_SESSION_ID
+fi
+
 PROJECT_ROOT=$(detect_project_root)
 CLAUDE_DIR=$(get_claude_dir)
 

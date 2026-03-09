@@ -372,6 +372,104 @@ test_backfill_unmatched_uses_unknown() {
 }
 
 # ============================================================================
+# Test group 3b: Two-tier null-project fallback (issue #175)
+# ============================================================================
+# When the closest trace has "unknown" project_name, the backfill should fall
+# back to the nearest trace that has a real name — as long as it's within the
+# 30-minute match window. This prevents failed tester dispatches (which always
+# produce null/unknown project_name) from masking the real project identity.
+
+test_backfill_null_fallback_uses_nearest_named_trace() {
+    run_test
+    # Setup: history entry at T=0
+    #   Trace A at T+2min: project_name="unknown"  (closest)
+    #   Trace B at T+5min: project_name="my-project" (slightly farther but named)
+    # Expected: backfill uses "my-project" (not "unknown")
+    local tmpdir
+    tmpdir=$(mktemp -d /Users/turla/.claude/tmp/test-backfill-XXXXXX)
+    _CLEANUP_DIRS+=("$tmpdir")
+
+    local history_file="${tmpdir}/.session-token-history"
+    # Base time: 2026-06-01T10:00:00Z
+    printf '2026-06-01T10:00:00Z|150000|150000|0|sess-175-fallback\n' > "$history_file"
+
+    local trace_index="${tmpdir}/traces/index.jsonl"
+    mkdir -p "${tmpdir}/traces"
+    # Trace A: 2 minutes after — closest but unknown
+    printf '{"trace_id":"tester-001","project_name":"unknown","started_at":"2026-06-01T10:02:00Z"}\n' > "$trace_index"
+    # Trace B: 5 minutes after — slightly farther but has real name
+    printf '{"trace_id":"impl-001","project_name":"my-project","started_at":"2026-06-01T10:05:00Z"}\n' >> "$trace_index"
+
+    bash "$BACKFILL" "$history_file" "$trace_index" >/dev/null 2>&1 || true
+
+    local project_name
+    project_name=$(awk -F'|' '{print $7}' "$history_file" | head -1)
+    if [[ "$project_name" == "my-project" ]]; then
+        pass_test "Null fallback: closest trace 'unknown' overridden by nearest named trace 'my-project'"
+    else
+        fail_test "Null fallback: expected 'my-project', got project_name='$project_name'" \
+                  "closest='unknown'@+2min, named='my-project'@+5min, both within window"
+    fi
+}
+
+test_backfill_null_fallback_all_unknown_stays_unknown() {
+    run_test
+    # When ALL traces in the window are "unknown", result must remain "unknown"
+    local tmpdir
+    tmpdir=$(mktemp -d /Users/turla/.claude/tmp/test-backfill-XXXXXX)
+    _CLEANUP_DIRS+=("$tmpdir")
+
+    local history_file="${tmpdir}/.session-token-history"
+    printf '2026-06-02T10:00:00Z|200000|200000|0|sess-175-allunk\n' > "$history_file"
+
+    local trace_index="${tmpdir}/traces/index.jsonl"
+    mkdir -p "${tmpdir}/traces"
+    # Both traces within window are "unknown"
+    printf '{"trace_id":"tester-a","project_name":"unknown","started_at":"2026-06-02T10:03:00Z"}\n' > "$trace_index"
+    printf '{"trace_id":"tester-b","project_name":"unknown","started_at":"2026-06-02T10:08:00Z"}\n' >> "$trace_index"
+
+    bash "$BACKFILL" "$history_file" "$trace_index" >/dev/null 2>&1 || true
+
+    local project_name
+    project_name=$(awk -F'|' '{print $7}' "$history_file" | head -1)
+    if [[ "$project_name" == "unknown" ]]; then
+        pass_test "Null fallback: all-unknown window correctly results in 'unknown' project_name"
+    else
+        fail_test "Null fallback: expected 'unknown' (all traces unknown), got '$project_name'" \
+                  "no named trace exists in window — should stay unknown"
+    fi
+}
+
+test_backfill_null_fallback_real_name_closest_no_regression() {
+    run_test
+    # When the closest trace already has a real name, it must still be used (no regression)
+    local tmpdir
+    tmpdir=$(mktemp -d /Users/turla/.claude/tmp/test-backfill-XXXXXX)
+    _CLEANUP_DIRS+=("$tmpdir")
+
+    local history_file="${tmpdir}/.session-token-history"
+    printf '2026-06-03T10:00:00Z|300000|300000|0|sess-175-noreg\n' > "$history_file"
+
+    local trace_index="${tmpdir}/traces/index.jsonl"
+    mkdir -p "${tmpdir}/traces"
+    # Closest trace has real name — should be used directly
+    printf '{"trace_id":"impl-closest","project_name":"real-project","started_at":"2026-06-03T10:01:00Z"}\n' > "$trace_index"
+    # Farther trace also has real name — should NOT override the closest
+    printf '{"trace_id":"impl-far","project_name":"other-project","started_at":"2026-06-03T10:20:00Z"}\n' >> "$trace_index"
+
+    bash "$BACKFILL" "$history_file" "$trace_index" >/dev/null 2>&1 || true
+
+    local project_name
+    project_name=$(awk -F'|' '{print $7}' "$history_file" | head -1)
+    if [[ "$project_name" == "real-project" ]]; then
+        pass_test "Null fallback no-regression: closest named trace 'real-project' used (not overridden)"
+    else
+        fail_test "Null fallback no-regression: expected 'real-project', got '$project_name'" \
+                  "closest trace had real name — original behavior must hold"
+    fi
+}
+
+# ============================================================================
 # Test group 4: Global lifetime sum
 # ============================================================================
 
@@ -395,6 +493,174 @@ test_global_lifetime_sum_all_entries() {
         pass_test "Global sum: all entries summed (350k) regardless of project"
     else
         fail_test "Global sum: wrong total" "expected=350000 actual=$global_sum"
+    fi
+}
+
+# ============================================================================
+# Test group 5: Session-id exact match (DEC-BACKFILL-SESSION-MATCH-001)
+# ============================================================================
+# Verifies Tier 0 session_id matching in backfill: when a token history entry
+# has the same session_id as a trace in the index, the backfill uses that
+# trace's project_name regardless of timestamp proximity.
+
+test_backfill_session_id_exact_match() {
+    run_test
+    # History entry at T=0 with known session_id
+    # Trace index has a trace with the SAME session_id but timestamp is 45min away
+    # (outside the 30-min window, so timestamp matching alone would fail)
+    # Tier 0 must find it via exact session_id match
+    local tmpdir
+    tmpdir=$(mktemp -d /Users/turla/.claude/tmp/test-backfill-sid-XXXXXX)
+    _CLEANUP_DIRS+=("$tmpdir")
+
+    local history_file="${tmpdir}/.session-token-history"
+    # Entry with known session_id — no project columns yet
+    printf '2026-06-10T10:00:00Z|500000|500000|0|sess-exact-abc123\n' > "$history_file"
+
+    local trace_index="${tmpdir}/traces/index.jsonl"
+    mkdir -p "${tmpdir}/traces"
+    # Trace is 45 minutes later (outside 30-min window), but same session_id
+    printf '{"trace_id":"impl-abc","session_id":"sess-exact-abc123","project_name":"correct-project","started_at":"2026-06-10T10:45:00Z"}\n' > "$trace_index"
+
+    bash "$BACKFILL" "$history_file" "$trace_index" >/dev/null 2>&1 || true
+
+    local project_name
+    project_name=$(awk -F'|' '{print $7}' "$history_file" | head -1)
+    if [[ "$project_name" == "correct-project" ]]; then
+        pass_test "Session-id Tier 0: exact session_id match finds project beyond timestamp window"
+    else
+        fail_test "Session-id Tier 0: expected 'correct-project' via session_id, got '$project_name'" \
+                  "trace is 45min away (past 30-min window) but same session_id — should match"
+    fi
+}
+
+test_backfill_session_id_match_trumps_closer_unknown() {
+    run_test
+    # History entry with known session_id
+    # Trace A: 2 min away, session_id matches, project_name="unknown" (skip — no real name)
+    # Trace B: 10 min away, session_id matches, project_name="real-project"
+    # Trace C: 1 min away, different session_id, project_name="wrong-project"
+    # Expected: "real-project" (Tier 0 finds exact session_id with real name)
+    local tmpdir
+    tmpdir=$(mktemp -d /Users/turla/.claude/tmp/test-backfill-sid-XXXXXX)
+    _CLEANUP_DIRS+=("$tmpdir")
+
+    local history_file="${tmpdir}/.session-token-history"
+    printf '2026-06-11T10:00:00Z|100000|100000|0|sess-match-xyz\n' > "$history_file"
+
+    local trace_index="${tmpdir}/traces/index.jsonl"
+    mkdir -p "${tmpdir}/traces"
+    # Trace A: closest time, same session, but unknown project — should be skipped in Tier 0
+    printf '{"trace_id":"tester-x","session_id":"sess-match-xyz","project_name":"unknown","started_at":"2026-06-11T10:02:00Z"}\n' > "$trace_index"
+    # Trace B: 10 min, same session, real project — Tier 0 should find this
+    printf '{"trace_id":"impl-x","session_id":"sess-match-xyz","project_name":"real-project","started_at":"2026-06-11T10:10:00Z"}\n' >> "$trace_index"
+    # Trace C: 1 min, different session — should NOT be used by Tier 0
+    printf '{"trace_id":"impl-y","session_id":"sess-other-999","project_name":"wrong-project","started_at":"2026-06-11T10:01:00Z"}\n' >> "$trace_index"
+
+    bash "$BACKFILL" "$history_file" "$trace_index" >/dev/null 2>&1 || true
+
+    local project_name
+    project_name=$(awk -F'|' '{print $7}' "$history_file" | head -1)
+    if [[ "$project_name" == "real-project" ]]; then
+        pass_test "Session-id Tier 0: real project found via session_id even with closer different-session trace"
+    else
+        fail_test "Session-id Tier 0: expected 'real-project' via session_id match, got '$project_name'" \
+                  "should ignore closer trace with different session_id"
+    fi
+}
+
+test_backfill_session_id_unknown_falls_back_to_timestamp() {
+    run_test
+    # History entry with session_id="unknown" — Tier 0 must be skipped
+    # Falls back to Tier 1+2 timestamp matching
+    local tmpdir
+    tmpdir=$(mktemp -d /Users/turla/.claude/tmp/test-backfill-sid-XXXXXX)
+    _CLEANUP_DIRS+=("$tmpdir")
+
+    local history_file="${tmpdir}/.session-token-history"
+    printf '2026-06-12T10:00:00Z|200000|200000|0|unknown\n' > "$history_file"
+
+    local trace_index="${tmpdir}/traces/index.jsonl"
+    mkdir -p "${tmpdir}/traces"
+    # Trace 3 min away — Tier 1 timestamp match should find it
+    printf '{"trace_id":"impl-fallback","session_id":"real-session-99","project_name":"ts-matched-project","started_at":"2026-06-12T10:03:00Z"}\n' > "$trace_index"
+
+    bash "$BACKFILL" "$history_file" "$trace_index" >/dev/null 2>&1 || true
+
+    local project_name
+    project_name=$(awk -F'|' '{print $7}' "$history_file" | head -1)
+    if [[ "$project_name" == "ts-matched-project" ]]; then
+        pass_test "Session-id Tier 0 bypass: 'unknown' session_id falls back to timestamp matching"
+    else
+        fail_test "Session-id Tier 0 bypass: expected 'ts-matched-project' via timestamp, got '$project_name'" \
+                  "session_id='unknown' should skip Tier 0 and use timestamp fallback"
+    fi
+}
+
+# ============================================================================
+# Test group 6: read_input() session_id extraction (DEC-SESSION-ID-001)
+# ============================================================================
+
+test_read_input_extracts_session_id() {
+    run_test
+    # Source log.sh, feed JSON via process substitution (NOT pipe — pipe creates subshell,
+    # which would prevent the export from reaching the calling shell). Verify CLAUDE_SESSION_ID
+    # is set after read_input returns.
+    local HOOKS_DIR_LOCAL="${SCRIPT_DIR}/../hooks"
+    local result
+    result=$(bash -c "
+        unset CLAUDE_SESSION_ID
+        source '${HOOKS_DIR_LOCAL}/log.sh' 2>/dev/null
+        # Process substitution avoids pipe subshell — export propagates to outer shell
+        read_input < <(printf '{\"session_id\":\"test-session-extraction-001\",\"hook_event_name\":\"PreToolUse\"}') >/dev/null
+        printf '%s' \"\${CLAUDE_SESSION_ID:-UNSET}\"
+    " 2>/dev/null)
+
+    if [[ "$result" == "test-session-extraction-001" ]]; then
+        pass_test "read_input: extracts session_id and exports CLAUDE_SESSION_ID"
+    else
+        fail_test "read_input: expected CLAUDE_SESSION_ID='test-session-extraction-001', got '$result'" \
+                  "log.sh read_input() must export CLAUDE_SESSION_ID from stdin JSON"
+    fi
+}
+
+test_read_input_preserves_existing_session_id() {
+    run_test
+    # If CLAUDE_SESSION_ID is already set (e.g. future native env var), read_input must NOT overwrite it
+    local HOOKS_DIR_LOCAL="${SCRIPT_DIR}/../hooks"
+    local result
+    result=$(bash -c "
+        export CLAUDE_SESSION_ID='preexisting-session-id'
+        source '${HOOKS_DIR_LOCAL}/log.sh' 2>/dev/null
+        read_input < <(printf '{\"session_id\":\"new-session-id\",\"hook_event_name\":\"PreToolUse\"}') >/dev/null
+        printf '%s' \"\${CLAUDE_SESSION_ID:-UNSET}\"
+    " 2>/dev/null)
+
+    if [[ "$result" == "preexisting-session-id" ]]; then
+        pass_test "read_input: does not overwrite existing CLAUDE_SESSION_ID (preserves native env var)"
+    else
+        fail_test "read_input: overwrote existing CLAUDE_SESSION_ID" \
+                  "expected 'preexisting-session-id', got '$result'"
+    fi
+}
+
+test_read_input_empty_when_no_session_id() {
+    run_test
+    # JSON without session_id should result in empty CLAUDE_SESSION_ID (not "null" or error)
+    local HOOKS_DIR_LOCAL="${SCRIPT_DIR}/../hooks"
+    local result
+    result=$(bash -c "
+        unset CLAUDE_SESSION_ID
+        source '${HOOKS_DIR_LOCAL}/log.sh' 2>/dev/null
+        read_input < <(printf '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\"}') >/dev/null
+        printf '%s' \"\${CLAUDE_SESSION_ID:-EMPTY}\"
+    " 2>/dev/null)
+
+    if [[ "$result" == "EMPTY" || -z "$result" ]]; then
+        pass_test "read_input: CLAUDE_SESSION_ID stays empty when stdin has no session_id"
+    else
+        fail_test "read_input: unexpected CLAUDE_SESSION_ID value when no session_id in JSON" \
+                  "got '$result' (expected empty/unset)"
     fi
 }
 
@@ -423,6 +689,24 @@ test_backfill_creates_backup
 test_backfill_idempotent_on_new_format
 test_backfill_adds_columns_to_5col_entries
 test_backfill_unmatched_uses_unknown
+
+echo ""
+echo "--- Backfill null-project fallback (issue #175) ---"
+test_backfill_null_fallback_uses_nearest_named_trace
+test_backfill_null_fallback_all_unknown_stays_unknown
+test_backfill_null_fallback_real_name_closest_no_regression
+
+echo ""
+echo "--- Backfill session_id exact match (DEC-BACKFILL-SESSION-MATCH-001) ---"
+test_backfill_session_id_exact_match
+test_backfill_session_id_match_trumps_closer_unknown
+test_backfill_session_id_unknown_falls_back_to_timestamp
+
+echo ""
+echo "--- read_input() session_id extraction (DEC-SESSION-ID-001) ---"
+test_read_input_extracts_session_id
+test_read_input_preserves_existing_session_id
+test_read_input_empty_when_no_session_id
 
 echo ""
 echo "--- Global lifetime sum ---"
