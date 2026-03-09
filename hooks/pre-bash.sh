@@ -594,7 +594,8 @@ declare_gate "git-early-exit" "Skip git-specific checks for non-git commands" "s
 if ! echo "$_stripped_cmd" | grep -qE '(^|&&|\|\|?|;)\s*git\s'; then
     # Run doc-freshness for non-git commands? No — doc-freshness only fires on commit/merge.
     # Since this is not a git command, skip doc-freshness too.
-    _HOOK_COMPLETED=true
+    # emit_flush delivers any buffered advisories (e.g., B9 schema change, B12 MySQL DDL).
+    emit_flush
     exit 0
 fi
 
