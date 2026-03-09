@@ -637,7 +637,7 @@ test_tokens_segment_present() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if [[ "$line2" == *"tks:"* ]]; then
+    if [[ "$line2" == *"tks"* ]]; then
         pass_test "Token segment present in line 2"
     else
         fail_test "Token segment absent from line 2" "line2=$line2"
@@ -651,8 +651,8 @@ test_tokens_k_notation() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if [[ "$line2" == *"tks: 145k"* ]]; then
-        pass_test "Token count 145000 displays as 'tks: 145k'"
+    if [[ "$line2" == *"145ktks"* ]]; then
+        pass_test "Token count 145000 displays as '145ktks'"
     else
         fail_test "Token K notation wrong" "line2=$line2"
     fi
@@ -665,8 +665,8 @@ test_tokens_raw_below_1k() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if [[ "$line2" == *"tks: 500"* ]]; then
-        pass_test "Token count 500 displays as 'tks: 500' (raw, no suffix)"
+    if [[ "$line2" == *"500tks"* ]]; then
+        pass_test "Token count 500 displays as '500tks' (raw, no suffix)"
     else
         fail_test "Token raw notation wrong" "line2=$line2"
     fi
@@ -679,8 +679,8 @@ test_tokens_m_notation() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if [[ "$line2" == *"tks: 1.5M"* ]]; then
-        pass_test "Token count 1500000 displays as 'tks: 1.5M'"
+    if [[ "$line2" == *"1.5Mtks"* ]]; then
+        pass_test "Token count 1500000 displays as '1.5Mtks'"
     else
         fail_test "Token M notation wrong" "line2=$line2"
     fi
@@ -688,13 +688,13 @@ test_tokens_m_notation() {
 
 test_tokens_zero_shows_dim() {
     run_test
-    # 0 tokens → "tks: 0", dim color (ESC[2m)
+    # 0 tokens → "0tks", dim color (ESC[2m)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
     local line2_raw
     line2_raw=$(run_statusline "$json" | tail -1)
 
-    # Dim = ESC[2m before "tks:"
-    if printf '%s' "$line2_raw" | grep -q $'\033\[2mtks:'; then
+    # Dim = ESC[2m applied to "0tks" segment
+    if printf '%s' "$line2_raw" | grep -q $'\033\[2m0tks'; then
         pass_test "Token count 0 shows in dim color"
     else
         fail_test "Token count 0 not dim" "raw: $(printf '%s' "$line2_raw" | cat -v)"
@@ -708,8 +708,8 @@ test_tokens_high_shows_yellow() {
     local line2_raw
     line2_raw=$(run_statusline "$json" | tail -1)
 
-    # Yellow = ESC[33m before "tks:"
-    if printf '%s' "$line2_raw" | grep -q $'\033\[33mtks:'; then
+    # Yellow = ESC[33m applied to "600ktks" segment
+    if printf '%s' "$line2_raw" | grep -q $'\033\[33m600ktks'; then
         pass_test "Token count >500k shows in yellow"
     else
         fail_test "Token count >500k not yellow" "raw: $(printf '%s' "$line2_raw" | cat -v)"
@@ -725,13 +725,13 @@ test_tokens_segment_position() {
 
     local pos_bar pos_tokens pos_cost
     pos_bar=$(printf '%s' "$line2" | { grep -bo '\[' || true; } | head -1 | cut -d: -f1)
-    pos_tokens=$(printf '%s' "$line2" | { grep -bo 'tks:' || true; } | head -1 | cut -d: -f1)
+    pos_tokens=$(printf '%s' "$line2" | { grep -bo 'ktks' || true; } | head -1 | cut -d: -f1)
     pos_cost=$(printf '%s' "$line2" | { grep -bo '~\$' || true; } | head -1 | cut -d: -f1)
 
     if [[ -n "$pos_bar" && -n "$pos_tokens" && -n "$pos_cost" ]] \
         && (( pos_bar < pos_tokens )) \
         && (( pos_tokens < pos_cost )); then
-        pass_test "Line 2 order: context bar < tks: < ~\$cost"
+        pass_test "Line 2 order: context bar < Ntks < ~\$cost"
     else
         fail_test "Line 2 segment order wrong" \
             "line2=$line2 | positions: bar=$pos_bar tks=$pos_tokens cost=$pos_cost"
@@ -1100,7 +1100,7 @@ make_lifetime_token_cache() {
 
 test_lifetime_tokens_absent_when_zero_history_no_subagent() {
     run_test
-    # No past sessions (lifetime_tokens=0), no subagents → plain "tks: 145k", no Σ
+    # No past sessions (lifetime_tokens=0), no subagents → plain "145ktks", no Σ
     local tmpdir
     tmpdir=$(mktemp -d)
     make_lifetime_token_cache "$tmpdir" 0 0
@@ -1113,8 +1113,8 @@ test_lifetime_tokens_absent_when_zero_history_no_subagent() {
     rm -rf "$tmpdir"
 
     # tks: 145k should be present, Σ should NOT be present
-    if [[ "$line2" == *"tks: 145k"* ]] && [[ "$line2" != *"Σ"* ]]; then
-        pass_test "Lifetime tokens: no Σ when lifetime=0 and no subagents (first session)"
+    if [[ "$line2" == *"145ktks"* ]] && [[ "$line2" != *"∑"* ]]; then
+        pass_test "Lifetime tokens: no ∑ when lifetime=0 and no subagents (first session)"
     else
         fail_test "Lifetime tokens: unexpected Σ on first session or wrong tks display" "line2=$line2"
     fi
@@ -1134,9 +1134,9 @@ test_lifetime_tokens_shown_with_past_sessions() {
     line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
     rm -rf "$tmpdir"
 
-    # Should show "tks: 145k │ Σ1.1M" — 1000000 past + 145000 current
-    if [[ "$line2" == *"tks: 145k"* ]] && [[ "$line2" == *"Σ"* ]] && [[ "$line2" == *"1.1M"* ]]; then
-        pass_test "Lifetime tokens: Σ1.1M shown when past sessions contributed 1M tokens"
+    # Should show "145ktks │ Project Lifetime: ∑1.1Mtks" — 1000000 past + 145000 current
+    if [[ "$line2" == *"145ktks"* ]] && [[ "$line2" == *"∑"* ]] && [[ "$line2" == *"1.1M"* ]]; then
+        pass_test "Lifetime tokens: ∑1.1Mtks shown when past sessions contributed 1M tokens"
     else
         fail_test "Lifetime tokens: Σ annotation or value wrong for past sessions" "line2=$line2"
     fi
@@ -1157,11 +1157,11 @@ test_lifetime_tokens_includes_subagent() {
     line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
     rm -rf "$tmpdir"
 
-    # 0 past + 145k main + 95k subagent = tks: 145k(+95k), no Σ segment
-    if [[ "$line2" == *"tks: 145k"* ]] && [[ "$line2" == *"(+95k)"* ]] && [[ "$line2" != *"Σ"* ]]; then
-        pass_test "Lifetime tokens: tks: 145k(+95k) shown when subagent adds 95k, no Σ (no past sessions)"
+    # 0 past + 145k main + 95k subagent = 145ktks(+subs95ktks), no ∑ segment
+    if [[ "$line2" == *"145ktks"* ]] && [[ "$line2" == *"(+subs95ktks)"* ]] && [[ "$line2" != *"∑"* ]]; then
+        pass_test "Lifetime tokens: 145ktks(+subs95ktks) shown when subagent adds 95k, no ∑ (no past sessions)"
     else
-        fail_test "Lifetime tokens: subagent-only format wrong (expected tks: 145k(+95k), no Σ)" "line2=$line2"
+        fail_test "Lifetime tokens: subagent-only format wrong (expected 145ktks(+subs95ktks), no ∑)" "line2=$line2"
     fi
 }
 
@@ -1179,9 +1179,9 @@ test_lifetime_tokens_grand_total_all_sources() {
     line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
     rm -rf "$tmpdir"
 
-    # 500000 + 145000 + 55000 = 700000 → 700k; subagent shown as (+55k)
-    if [[ "$line2" == *"tks: 145k"* ]] && [[ "$line2" == *"(+55k)"* ]] && [[ "$line2" == *"Σ"* ]] && [[ "$line2" == *"700k"* ]]; then
-        pass_test "Lifetime tokens: tks: 145k(+55k) │ Σ700k = past(500k) + main(145k) + subagent(55k)"
+    # 500000 + 145000 + 55000 = 700000 → 700ktks; subagent shown as (+subs55ktks)
+    if [[ "$line2" == *"145ktks"* ]] && [[ "$line2" == *"(+subs55ktks)"* ]] && [[ "$line2" == *"∑"* ]] && [[ "$line2" == *"700k"* ]]; then
+        pass_test "Lifetime tokens: 145ktks(+subs55ktks) │ ∑700ktks = past(500k) + main(145k) + subagent(55k)"
     else
         fail_test "Lifetime tokens: grand total from all 3 sources wrong" "line2=$line2"
     fi
@@ -1194,10 +1194,10 @@ test_lifetime_tokens_absent_when_cache_absent() {
     local line2
     line2=$(run_statusline "$json" | tail -1 | strip_ansi)
 
-    if [[ "$line2" != *"Σ"* ]]; then
-        pass_test "Lifetime tokens: no Σ when cache absent (no history)"
+    if [[ "$line2" != *"∑"* ]]; then
+        pass_test "Lifetime tokens: no ∑ when cache absent (no history)"
     else
-        fail_test "Lifetime tokens: Σ shown without cache file" "line2=$line2"
+        fail_test "Lifetime tokens: ∑ shown without cache file" "line2=$line2"
     fi
 }
 
@@ -1215,11 +1215,11 @@ test_lifetime_tokens_dim_rendering() {
     line2_raw=$(printf '%s' "$output" | tail -1)
     rm -rf "$tmpdir"
 
-    # Dim annotation pattern: ESC[2mΣNk (Σ is now a standalone dim segment)
-    if printf '%s' "$line2_raw" | grep -q $'\033\[2mΣ'; then
-        pass_test "Lifetime tokens: Σ segment rendered dim (ESC[2m)"
+    # Dim annotation pattern: ESC[2mProject Lifetime: ∑Nktks
+    if printf '%s' "$line2_raw" | grep -q $'\033\[2mProject Lifetime:'; then
+        pass_test "Lifetime tokens: ∑ (Project Lifetime:) segment rendered dim (ESC[2m)"
     else
-        fail_test "Lifetime tokens: Σ segment not dim-rendered" "raw: $(printf '%s' "$line2_raw" | cat -v)"
+        fail_test "Lifetime tokens: ∑ segment not dim-rendered" "raw: $(printf '%s' "$line2_raw" | cat -v)"
     fi
 }
 
@@ -1246,7 +1246,7 @@ test_responsive_all_segments_wide() {
     [[ "$stripped" != *"agents: 3"* ]] && ok=false
     [[ "$stripped" != *"4p"* ]] && ok=false
     [[ "$stripped" != *"Opus 4.6"* ]] && ok=false
-    [[ "$stripped" != *"tks:"* ]] && ok=false
+    [[ "$stripped" != *"tks"* ]] && ok=false
     if $ok; then
         pass_test "Responsive: COLUMNS=200 shows all segments"
     else
@@ -1331,6 +1331,97 @@ test_responsive_no_truncation_at_wide() {
 }
 
 # ============================================================================
+# ============================================================================
+# Test group 15: New token format (issue #160 — <N>tks(+subs<S>tks) and
+#   Project Lifetime: ∑<N>tks)
+# @decision DEC-TOKEN-FORMAT-001
+# @title New token format: Ntks(+subsStks) and "Project Lifetime: ∑Ntks"
+# @status accepted
+# @rationale Issue #160 requested a more explicit format that labels the subagent
+# contribution as "subs" and adds the "Project Lifetime:" prefix before the Σ
+# symbol. The "tks" suffix after the count makes each segment self-labelling
+# without the "tks:" prefix label needing to carry the whole segment.
+# ============================================================================
+
+test_new_token_format_no_subagent() {
+    run_test
+    # 145k tokens, no subagents → "145ktks" (no "(+subs...)" suffix)
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    line2=$(run_statusline "$json" | tail -1 | strip_ansi)
+
+    if [[ "$line2" == *"145ktks"* ]]; then
+        pass_test "New format: 145k tokens displays as '145ktks' (no space between count and tks)"
+    else
+        fail_test "New format: '145ktks' not found" "line2=$line2"
+    fi
+}
+
+test_new_token_format_with_subagent() {
+    run_test
+    # 145k main tokens + 32k subagent → "145ktks(+subs32ktks)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    make_lifetime_token_cache "$tmpdir" 0 32000
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    local output
+    output=$(run_statusline "$json" "$tmpdir")
+    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    if [[ "$line2" == *"145ktks(+subs32ktks)"* ]]; then
+        pass_test "New format: 145k main + 32k sub → '145ktks(+subs32ktks)'"
+    else
+        fail_test "New format: '145ktks(+subs32ktks)' not found" "line2=$line2"
+    fi
+}
+
+test_new_lifetime_format_with_prefix() {
+    run_test
+    # Past lifetime 9.5M tokens → lifetime display includes "Project Lifetime:"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    make_lifetime_token_cache "$tmpdir" 9500000 0
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    local output
+    output=$(run_statusline "$json" "$tmpdir")
+    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    if [[ "$line2" == *"Project Lifetime:"* ]]; then
+        pass_test "New format: lifetime segment contains 'Project Lifetime:' prefix"
+    else
+        fail_test "New format: 'Project Lifetime:' prefix not found" "line2=$line2"
+    fi
+}
+
+test_new_lifetime_format_tks_suffix() {
+    run_test
+    # Past lifetime 9.5M → "∑9.5Mtks" (tks suffix after the M notation)
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    make_lifetime_token_cache "$tmpdir" 9500000 0
+
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
+    local output
+    output=$(run_statusline "$json" "$tmpdir")
+    line2=$(printf '%s' "$output" | tail -1 | strip_ansi)
+    rm -rf "$tmpdir"
+
+    # Grand total = 9500000 + 145000 = 9645000 ≈ 9.6M
+    if [[ "$line2" == *"∑"*"tks"* ]]; then
+        pass_test "New format: lifetime segment contains '∑<N>tks' (with tks suffix)"
+    else
+        fail_test "New format: '∑<N>tks' pattern not found" "line2=$line2"
+    fi
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 
@@ -1385,7 +1476,7 @@ test_no_version_segment
 test_no_time_segment
 
 echo ""
-echo "--- Domain clustering — line 1 labels (REQ-P0-001, REQ-P0-002) ---"
+echo "--- Domain clustering line 1 labels ---"
 test_dirty_label_format
 test_wt_label_format
 test_agents_label_format
@@ -1393,7 +1484,7 @@ test_todos_label_format
 test_domain_clustering_order
 
 echo ""
-echo "--- Token count segment (REQ-P0-004) ---"
+echo "--- Token count segment ---"
 test_tokens_segment_present
 test_tokens_k_notation
 test_tokens_raw_below_1k
@@ -1403,7 +1494,7 @@ test_tokens_high_shows_yellow
 test_tokens_segment_position
 
 echo ""
-echo "--- Todo split display (REQ-P0-005) ---"
+echo "--- Todo split display ---"
 test_todo_split_both_nonzero
 test_todo_split_project_only
 test_todo_split_global_only
@@ -1412,13 +1503,13 @@ test_todo_split_backward_compat_no_cache_fields
 test_todo_split_p_suffix_present
 
 echo ""
-echo "--- Lifetime cost display (REQ-P1-001) ---"
+echo "--- Lifetime cost display ---"
 test_lifetime_cost_absent_when_zero
 test_lifetime_cost_shown_when_nonzero
 test_lifetime_cost_not_shown_when_cache_absent
 
 echo ""
-echo "--- Initiative banner Line 0 (issue #91 redesign) ---"
+echo "--- Initiative banner Line 0 ---"
 test_banner_absent_when_no_plan
 test_banner_shows_full_initiative_and_phase
 test_banner_shows_initiative_without_phase
@@ -1427,7 +1518,7 @@ test_banner_shows_multi_initiative_suffix
 test_banner_is_last_line
 
 echo ""
-echo "--- Lifetime token display (DEC-LIFETIME-TOKENS-001) ---"
+echo "--- Lifetime token display ---"
 test_lifetime_tokens_absent_when_zero_history_no_subagent
 test_lifetime_tokens_shown_with_past_sessions
 test_lifetime_tokens_includes_subagent
@@ -1436,9 +1527,14 @@ test_lifetime_tokens_absent_when_cache_absent
 test_lifetime_tokens_dim_rendering
 
 echo ""
+echo "--- New token format (issue #160) ---"
+test_new_token_format_no_subagent
+test_new_token_format_with_subagent
+test_new_lifetime_format_with_prefix
+test_new_lifetime_format_tks_suffix
 
 echo ""
-echo "--- Responsive layout (DEC-RESPONSIVE-001) ---"
+echo "--- Responsive layout ---"
 test_responsive_all_segments_wide
 test_responsive_line1_narrow_drops_todos
 test_responsive_line1_very_narrow_keeps_workspace

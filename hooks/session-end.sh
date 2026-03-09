@@ -183,34 +183,38 @@ fi
 # available from Claude Code's SessionEnd hook when the model exposes it; if absent
 # (null or missing), we write 0.00 as a placeholder so the file structure is always
 # consistent. session-init.sh sums the cost column with awk for lifetime display.
-# History is trimmed to 100 entries to prevent unbounded disk growth.
 _SESSION_COST=$(printf '%s' "$_SESSION_END_INPUT" | jq -r '.cost.total_cost_usd // 0' 2>/dev/null || echo "0")
 _SESSION_COST="${_SESSION_COST:-0}"
 _COST_HISTORY="${CLAUDE_DIR}/.session-cost-history"
 _COST_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)
 echo "${_COST_TS}|${_SESSION_COST}|${CLAUDE_SESSION_ID:-unknown}" >> "$_COST_HISTORY"
-
-# Trim to last 100 entries (prevent unbounded growth)
-_COST_LINES=$(wc -l < "$_COST_HISTORY" 2>/dev/null | tr -d ' ')
-if [[ "${_COST_LINES:-0}" -gt 100 ]]; then
-    tail -100 "$_COST_HISTORY" > "${_COST_HISTORY}.tmp"
-    mv "${_COST_HISTORY}.tmp" "$_COST_HISTORY"
-fi
 log_info "SESSION-END" "Persisted session cost: ${_SESSION_COST}"
 
 # --- Persist session tokens to .session-token-history ---
 # @decision DEC-LIFETIME-TOKENS-002
 # @title Append session tokens to pipe-delimited history file at session-end
 # @status accepted
-# @rationale Mirrors DEC-COST-PERSIST-002 for tokens. A pipe-delimited file
-# (timestamp|total_tokens|main_tokens|subagent_tokens|session_id) is the
+# @rationale Mirrors DEC-COST-PERSIST-002 for tokens. A pipe-delimited file is the
 # lowest-overhead persistence format: append-only, awk-summable, human-readable.
+# Format: timestamp|total_tokens|main_tokens|subagent_tokens|session_id|project_hash|project_name
+# (7 columns; previously 5 — columns 6+7 added in issue #160 to enable per-project filtering).
 # main_tokens are read from .session-main-tokens (written by statusline.sh on
 # each render — most recent value before session ends). subagent_tokens are summed
 # from the session-scoped .subagent-tokens-<SESSION_ID> file (field 7 = total).
 # The subagent tokens file MUST be read before it is deleted in the cleanup section.
-# session-init.sh sums the total_tokens column for the lifetime display.
-# History is trimmed to 100 entries to prevent unbounded disk growth.
+# session-init.sh sums the total_tokens column filtered by project_hash (column 6) for
+# per-project lifetime display, with backward compat for old 5-column entries (no filter).
+# @decision DEC-PROJECT-TOKEN-HISTORY-001
+# @title Add project_hash and project_name as columns 6+7 of .session-token-history
+# @status accepted
+# @rationale Before this change, all sessions for all projects accumulated into one
+# sum, conflating work across projects. Adding the project hash (8-char SHA-256 of
+# PROJECT_ROOT) as column 6 lets session-init.sh filter by project. project_name
+# (basename of PROJECT_ROOT) is column 7 for human readability. Both are already
+# available in session-end.sh via PROJECT_ROOT and project_hash(). Old 5-column
+# entries are treated as "unscoped" and included in all project sums (backward compat).
+# Backfill script: scripts/backfill-token-history.sh retroactively adds these columns
+# using trace timestamps to identify the most likely project.
 _SUBAGENT_TOKEN_FILE="${CLAUDE_DIR}/.subagent-tokens-${CLAUDE_SESSION_ID:-$$}"
 _SUBAGENT_TOTAL=0
 if [[ -f "$_SUBAGENT_TOKEN_FILE" ]]; then
@@ -238,14 +242,18 @@ _SESSION_TOKENS=$(( _MAIN_TOKENS + _SUBAGENT_TOTAL ))
 if [[ "$_SESSION_TOKENS" -gt 0 ]]; then
     _TOKEN_HISTORY="${CLAUDE_DIR}/.session-token-history"
     _TOKEN_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)
-    echo "${_TOKEN_TS}|${_SESSION_TOKENS}|${_MAIN_TOKENS}|${_SUBAGENT_TOTAL}|${CLAUDE_SESSION_ID:-unknown}" >> "$_TOKEN_HISTORY"
-
-    # Trim to last 100 entries (prevent unbounded growth)
-    _TOKEN_LINES=$(wc -l < "$_TOKEN_HISTORY" 2>/dev/null | tr -d ' ')
-    if [[ "${_TOKEN_LINES:-0}" -gt 100 ]]; then
-        tail -100 "$_TOKEN_HISTORY" > "${_TOKEN_HISTORY}.tmp"
-        mv "${_TOKEN_HISTORY}.tmp" "$_TOKEN_HISTORY"
-    fi
+    # Columns 6+7: project_hash and project_name for per-project filtering in session-init.sh
+    _TOKEN_PHASH=$(project_hash "${PROJECT_ROOT:-}" 2>/dev/null || echo "")
+    _TOKEN_PNAME=$(basename "${PROJECT_ROOT:-unknown}" 2>/dev/null || echo "unknown")
+    # @decision DEC-NO-TRIM-001
+    # @title Remove 100-line trim from session history files
+    # @status accepted
+    # @rationale Each entry is ~80 bytes. Even 10,000 entries (3 years at 10 sessions/day)
+    #   is under 1MB. The trim was destroying valuable historical data (token spending,
+    #   cost tracking) for negligible disk savings. Users should never lose history they
+    #   might want to analyze. If size management is ever needed, annual rotation is
+    #   more appropriate than aggressive trimming.
+    echo "${_TOKEN_TS}|${_SESSION_TOKENS}|${_MAIN_TOKENS}|${_SUBAGENT_TOTAL}|${CLAUDE_SESSION_ID:-unknown}|${_TOKEN_PHASH}|${_TOKEN_PNAME}" >> "$_TOKEN_HISTORY"
 fi
 log_info "SESSION-END" "Persisted session tokens: main=${_MAIN_TOKENS} subagent=${_SUBAGENT_TOTAL} total=${_SESSION_TOKENS}"
 
@@ -472,16 +480,6 @@ rm -f "${CLAUDE_DIR}/tmp/.proof-status" 2>/dev/null
 # NOTE: .test-status is cleared at session START (session-init.sh), not here.
 # It must survive session-end so session-init can read it for context injection,
 # then clears it to prevent stale results from satisfying the commit gate.
-
-# --- Trim audit log to prevent unbounded growth (keep last 100 entries) ---
-AUDIT_LOG="${CLAUDE_DIR}/.audit-log"
-if [[ -f "$AUDIT_LOG" ]]; then
-    LINES=$(wc -l < "$AUDIT_LOG" | tr -d ' ')
-    if [[ "$LINES" -gt 100 ]]; then
-        tail -100 "$AUDIT_LOG" > "${AUDIT_LOG}.tmp"
-        mv "${AUDIT_LOG}.tmp" "$AUDIT_LOG"
-    fi
-fi
 
 log_info "SESSION-END" "Cleanup complete"
 exit 0

@@ -46,7 +46,7 @@
 # Output (stdout): 2-3 ANSI-formatted lines, each truncated to terminal width with ...
 #
 # Line layout (top to bottom):
-#   Line 1 (metrics):  model │ [context bar] │ tks: Nk │ ~$cost │ duration │ +lines/-lines │ cache %
+#   Line 1 (metrics):  model │ [context bar] │ Nktks(+subsStks) │ ~$cost │ Project Lifetime: ∑Tk │ duration │ cache %
 #   Line 2 (project):  workspace │ dirty: N  wt: N │ agents: N (types) │ todos: Np Ng
 #   Line 3 (highlight bar, conditional): Initiative Name (Phase N/M): Phase Title  ← bold cyan, bottom
 #
@@ -596,26 +596,26 @@ _append_p1_seg() {
 # segments first when total width exceeds terminal width.
 #
 # Priority table (lower number = higher priority, dropped last):
-#   1 = [context bar] N%     (drives user behavior)
-#   2 = tks: Nk(+Sk)        (token consumption)
-#   3 = ~$cost (Σ~$total)   (cost with lifetime)
-#   4 = ΣNk lifetime tokens  (cumulative across sessions)
-#   5 = model name           (usually known, nice-to-have)
-#   6 = cache N%             (efficiency metric)
-#   7 = duration             (session time)
-#   8 = +N/-N lines          (drops first)
+#   1 = [context bar] N%                      (drives user behavior)
+#   2 = Nktks(+subsStks)                      (token consumption)
+#   3 = ~$cost (Σ~$total)                     (cost with lifetime)
+#   4 = Project Lifetime: ∑Nktks              (cumulative across sessions)
+#   5 = model name                            (usually known, nice-to-have)
+#   6 = cache N%                              (efficiency metric)
+#   7 = duration                              (session time)
+#   8 = +N/-N lines                           (drops first)
 # ---------------------------------------------------------------------------
 
 # Token count segment with subagent breakdown and project lifetime
 # @decision DEC-LIFETIME-TOKENS-001
-# @title Display token usage as: tks: Nk(+Sk) │ ΣTk — main, subagent, and project total
+# @title Display token usage as: Nktks(+subsStks) │ Project Lifetime: ∑Tk
 # @status accepted
-# @rationale New format separates subagent contribution in-line (+Sk dim suffix) and
-# places the project lifetime Σ as a distinct segment after a separator. This is more
-# scannable than the previous (Σ) parenthetical: the eye lands on the current session
-# total first, the subagent cost is a minor annotation, and the cumulative Σ only
-# appears when there is genuine history (past sessions). The shorter "tks:" label saves
-# horizontal space. Supersedes DEC-SUBAGENT-TOKENS-004 and the inline (Σ) from v1.
+# @rationale Updated format (issue #160) makes each part self-labelling: "tks" directly
+# follows the count (no colon-separated label), "subs" prefix on the subagent count
+# clarifies its source, and "Project Lifetime: ∑" gives the grand total a human-readable
+# prefix. The ∑ symbol (not Σ) matches the Unicode mathematical summation character
+# requested in issue #160. Previous format: "tks: Nk(+Sk) │ ΣTk".
+# Supersedes DEC-SUBAGENT-TOKENS-004 and the inline (Σ) from v1.
 total_tokens_int="${total_tokens%.*}"
 total_tokens_int=$(( total_tokens_int ))
 tokens_str=$(format_tokens "$total_tokens_int")
@@ -646,20 +646,24 @@ if [[ -n "${workspace_dir:-}" ]]; then
   printf '%d' "$total_tokens_int" > "${_token_dir}/.session-main-tokens" 2>/dev/null || true
 fi
 
-# Build token display: tks: Nk  or  tks: Nk(+Sk)
+# Build token display: Nktks  or  Nktks(+subsStks)
+# Format: <N>tks(+subs<S>tks) — "tks" suffix on both main and subagent counts,
+# "subs" prefix on subagent to clarify source. Example: 145ktks(+subs32ktks)
 if (( cache_subagent_tokens_int > 0 )); then
   subagent_str=$(format_tokens "$cache_subagent_tokens_int")
-  tokens_display=$(printf '\033[%smtks: %s\033[2m(+%s)\033[0m' "$tokens_color" "$tokens_str" "$subagent_str")
+  tokens_display=$(printf '\033[%sm%stks\033[2m(+subs%stks)\033[0m' "$tokens_color" "$tokens_str" "$subagent_str")
 else
-  tokens_display=$(printf '\033[%smtks: %s\033[0m' "$tokens_color" "$tokens_str")
+  tokens_display=$(printf '\033[%sm%stks\033[0m' "$tokens_color" "$tokens_str")
 fi
 
 # Compute lifetime token grand total segment
+# Format: "Project Lifetime: ∑<N>tks" — prefix clarifies this is a project-wide sum.
+# ∑ is U+2211 (mathematical summation), distinct from Σ (U+03A3 Greek capital letter).
 _token_grand_total=$(( cache_lifetime_tokens_int + total_tokens_int + cache_subagent_tokens_int ))
 grand_total_display=""
 if (( _token_grand_total > total_tokens_int + cache_subagent_tokens_int && _token_grand_total > 0 )); then
   grand_total_str=$(format_tokens "$_token_grand_total")
-  grand_total_display=$(printf '\033[2mΣ%s\033[0m' "$grand_total_str")
+  grand_total_display=$(printf '\033[2mProject Lifetime: ∑%stks\033[0m' "$grand_total_str")
 fi
 
 # Build cost display

@@ -42,6 +42,26 @@ write_statusline_cache() {
     # Subagent status (populates SUBAGENT_* globals)
     get_subagent_status "$root"
 
+    # @decision DEC-LIFETIME-PERSIST-001
+    # @title Read existing cache lifetime fields as fallback defaults in write_statusline_cache
+    # @status accepted
+    # @rationale write_statusline_cache() is called from 7 hooks, but only session-init.sh
+    # sets LIFETIME_TOKENS/LIFETIME_COST before calling it. Every other caller runs in a
+    # fresh process where these globals are unset, defaulting to 0 and overwriting the
+    # previously-good values that session-init.sh computed. Fix: read the existing cache
+    # file and use its lifetime values as the default when the caller has not set the globals.
+    # The caller's explicit value (when set) always wins — only the unset case falls back.
+    # This is safe: the first call ever produces 0 (no cache exists), session-init.sh writes
+    # the real values, and all subsequent callers preserve them without needing to know about them.
+    local _prev_lifetime_tokens=0
+    local _prev_lifetime_cost=0
+    if [[ -f "$cache_file" ]]; then
+        _prev_lifetime_tokens=$(jq -r '.lifetime_tokens // 0' "$cache_file" 2>/dev/null || echo 0)
+        _prev_lifetime_cost=$(jq -r '.lifetime_cost // 0' "$cache_file" 2>/dev/null || echo 0)
+    fi
+    local _final_lifetime_tokens="${LIFETIME_TOKENS:-$_prev_lifetime_tokens}"
+    local _final_lifetime_cost="${LIFETIME_COST:-$_prev_lifetime_cost}"
+
     # Atomic write — only git/agent state, no plan or test fields
     # @decision DEC-CACHE-003
     # @title Add todo_project, todo_global, lifetime_cost, lifetime_tokens fields to statusline cache
@@ -62,8 +82,8 @@ write_statusline_cache() {
         --arg sa_total "${SUBAGENT_TOTAL_COUNT:-0}" \
         --arg todo_project "${TODO_PROJECT_COUNT:-0}" \
         --arg todo_global "${TODO_GLOBAL_COUNT:-0}" \
-        --arg lifetime_cost "${LIFETIME_COST:-0}" \
-        --arg lifetime_tokens "${LIFETIME_TOKENS:-0}" \
+        --arg lifetime_cost "$_final_lifetime_cost" \
+        --arg lifetime_tokens "$_final_lifetime_tokens" \
         --arg initiative "${PLAN_ACTIVE_INITIATIVE_NAME:-}" \
         --arg phase "${PLAN_IN_PROGRESS_PHASE:-}" \
         --arg active_initiatives "${PLAN_ACTIVE_INITIATIVES:-0}" \
