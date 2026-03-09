@@ -628,6 +628,13 @@ finalize_trace() {
 
 # Append a compact JSON line to the trace index for querying.
 # Usage: index_trace "trace_id"
+# @decision DEC-SESSION-ID-002
+# @title Include session_id in trace index for exact-match correlation
+# @status accepted
+# @rationale The trace index (index.jsonl) is the primary lookup for correlating
+#   sessions to traces. Without session_id in the index, correlation requires
+#   opening each trace's manifest.json — O(N) reads. Adding session_id to the
+#   index enables O(1) lookup by session for backfill scripts and observatory.
 index_trace() {
     local trace_id="$1"
     local manifest="${TRACE_STORE}/${trace_id}/manifest.json"
@@ -639,6 +646,7 @@ index_trace() {
     entry=$(jq -c '{
       trace_id: .trace_id,
       agent_type: .agent_type,
+      session_id: (.session_id // ""),
       project_name: .project_name,
       branch: .branch,
       started_at: .started_at,
@@ -685,6 +693,7 @@ rebuild_index() {
         entry=$(jq -c '{
           trace_id: (.trace_id // "unknown"),
           agent_type: (.agent_type // "unknown"),
+          session_id: (.session_id // ""),
           project_name: (.project_name // "unknown"),
           branch: (.branch // "unknown"),
           started_at: (.started_at // ""),

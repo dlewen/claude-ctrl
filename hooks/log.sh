@@ -56,9 +56,24 @@ fi
 # Cache stdin so multiple functions can read it
 HOOK_INPUT=""
 
+# @decision DEC-SESSION-ID-001
+# @title Extract session_id from Claude Code hook stdin JSON
+# @status accepted
+# @rationale Claude Code provides session_id in the stdin JSON to all hooks, but the
+#   hooks system was referencing CLAUDE_SESSION_ID as an env var that doesn't exist.
+#   Every fallback defaulted to $$ (PID, varies per hook) or "unknown". Extracting
+#   session_id in read_input() — the shared stdin capture function called by all hooks —
+#   ensures CLAUDE_SESSION_ID is available to every downstream function. Only sets it
+#   if not already set (preserves any future native env var support).
 read_input() {
     if [[ -z "$HOOK_INPUT" ]]; then
         HOOK_INPUT=$(cat)
+        # Extract session_id from Claude Code's hook input JSON
+        # Claude Code provides session_id in stdin to ALL hooks
+        if [[ -z "${CLAUDE_SESSION_ID:-}" ]]; then
+            CLAUDE_SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+            export CLAUDE_SESSION_ID
+        fi
     fi
     echo "$HOOK_INPUT"
 }
