@@ -610,7 +610,7 @@ elif [[ "$PROOF_STATUS" == "pending" ]]; then
     # Auto-verify was attempted above but AV_FAIL was set.
     # Check if AUTOVERIFY signal was present but failed secondary validation.
     if echo "$RESPONSE_TEXT" | grep -q 'AUTOVERIFY: CLEAN'; then
-        append_audit "$PROJECT_ROOT" "auto_verify_rejected" "Tester signaled AUTOVERIFY: CLEAN but secondary validation failed"
+        append_audit "$PROJECT_ROOT" "auto_verify_advisory" "AUTOVERIFY signal found in response but Phase 1 disabled (CLAUDE_ENABLE_SUBAGENT_AUTOVERIFY unset); advisory-only path"
     fi
     DIRECTIVE="TESTER COMPLETE: The tester has presented a verification report with evidence, methodology assessment, and confidence level. Present the full report to the user — do NOT reduce it to a keyword demand. The user can approve (approved, lgtm, looks good, verified, ship it), request more testing, or ask questions. Do NOT tell the user to 'say verified'. Guardian dispatch requires .proof-status = verified (prompt-submit.sh writes this on user approval)."
     # Inject trace evidence into directive (DEC-EVGATE-003, defense-in-depth)
