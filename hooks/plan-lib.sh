@@ -537,6 +537,75 @@ compress_initiative() {
     mv "$_tmp_file" "$plan_file"
 }
 
-export -f get_plan_status get_drift_data get_research_status archive_plan compress_initiative
+# --- Plan state cache ---
+# @decision DEC-EFF-013
+# @title Shared plan state cache across hooks (10s TTL)
+# @status accepted
+# @rationale Plan status is computed by 5 hooks per event cycle. MASTER_PLAN.md
+#   parsing is expensive (~100ms). 10-second TTL eliminates redundant parsing
+#   within event cycles. Plan changes are user-driven and infrequent.
+#   Safety invariant: Plan gates (Gate 2 in pre-write.sh) read cached state.
+#   If plan changes mid-event (extremely unlikely), cache expires in 10s.
+#   No deny gate is weakened — they still fire on the same conditions.
+#   Cache file: CLAUDE_DIR/.plan-state-cache (key=value format, no SID suffix —
+#   shared across hooks within a single session; cleaned by session-end.sh).
+#   Fallback: if cache read fails for any reason, falls back to fresh computation.
+#
+# _cached_plan_state ROOT [CLAUDE_DIR]
+#   Populates PLAN_EXISTS, PLAN_ACTIVE_INITIATIVES, PLAN_LIFECYCLE, and all
+#   other PLAN_* globals (via get_plan_status on cache miss).
+#   CLAUDE_DIR defaults to ROOT/.claude when not provided.
+_cached_plan_state() {
+    local root="$1"
+    local claude_dir="${2:-${CLAUDE_DIR:-$root/.claude}}"
+    local cache_file="$claude_dir/.plan-state-cache"
+    local cache_ttl=10  # seconds — plan changes are user-driven, infrequent
+
+    # Initialize defaults (safe if cache or computation fails)
+    PLAN_EXISTS=false
+    PLAN_ACTIVE_INITIATIVES=0
+    PLAN_LIFECYCLE="none"
+
+    # --- Cache hit check ---
+    if [[ -f "$cache_file" ]]; then
+        local cache_mtime now_epoch cache_age
+        cache_mtime=$(_file_mtime "$cache_file")
+        now_epoch=$(date +%s)
+        cache_age=$(( now_epoch - cache_mtime ))
+
+        if [[ "$cache_age" -le "$cache_ttl" ]]; then
+            # Cache hit — read values
+            local _exists _active _lifecycle
+            _exists=$(grep '^PLAN_EXISTS=' "$cache_file" 2>/dev/null | cut -d= -f2 || echo "")
+            _active=$(grep '^PLAN_ACTIVE_INITIATIVES=' "$cache_file" 2>/dev/null | cut -d= -f2 || echo "0")
+            _lifecycle=$(grep '^PLAN_LIFECYCLE=' "$cache_file" 2>/dev/null | cut -d= -f2- || echo "none")
+
+            # Validate: _exists must be "true" or "false"
+            if [[ "$_exists" == "true" || "$_exists" == "false" ]]; then
+                PLAN_EXISTS="$_exists"
+                PLAN_ACTIVE_INITIATIVES="${_active:-0}"
+                PLAN_LIFECYCLE="${_lifecycle:-none}"
+                return 0
+            fi
+            # Invalid cache → fall through to fresh computation
+        fi
+    fi
+
+    # --- Cache miss: compute fresh state ---
+    get_plan_status "$root"
+
+    # Write cache (atomic: write to tmp then move)
+    mkdir -p "$claude_dir" 2>/dev/null || true
+    local tmp_cache
+    tmp_cache="${cache_file}.tmp.$$"
+    {
+        printf 'PLAN_EXISTS=%s\n' "${PLAN_EXISTS:-false}"
+        printf 'PLAN_ACTIVE_INITIATIVES=%s\n' "${PLAN_ACTIVE_INITIATIVES:-0}"
+        printf 'PLAN_LIFECYCLE=%s\n' "${PLAN_LIFECYCLE:-none}"
+    } > "$tmp_cache" 2>/dev/null && mv "$tmp_cache" "$cache_file" 2>/dev/null || \
+        rm -f "$tmp_cache" 2>/dev/null || true
+}
+
+export -f get_plan_status _cached_plan_state get_drift_data get_research_status archive_plan compress_initiative
 
 _PLAN_LIB_LOADED=1
