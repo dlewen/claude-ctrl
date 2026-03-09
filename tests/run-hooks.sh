@@ -116,6 +116,7 @@ _print_scope_usage() {
     echo "  lint        — Shellcheck lint scope: lint.sh behavior + shellcheck on hooks/*.sh, tests/*.sh, tests/lib/*.sh, scripts/*.sh (matches CI exactly)"
     echo "  dbsafe-fixtures — db-safety fixture infrastructure (mock CLIs, setup-test-env, sample-commands, env-profiles)"
     echo "  dbsafe-w2b  — DB safety Wave 2b: migration allowlist, IaC/container/ORM interception (B5/B6/B7/B8)"
+    echo "  dbsafe-w3b  — DB Guardian Wave 3b: policy engine, simulation helpers, approval gate (D3/D4/D5)"
     echo ""
     echo "No --scope = run all tests (default, backward compatible)."
 }
@@ -171,6 +172,7 @@ _scope_pattern() {
         lint)              echo "lint\.sh|shellcheck.*(hooks|tests|scripts)" ;;
         dbsafe-fixtures)   echo "db-safety fixture infrastructure" ;;
         dbsafe-w2b)        echo "db-safety-lib\.sh unit tests.*Wave 2b" ;;
+        dbsafe-w3b)        echo "DB Guardian Wave 3b" ;;
         *)                 echo "" ;;
     esac
 }
@@ -3067,6 +3069,41 @@ fi
 
 echo ""
 fi # end: dbsafe-w2b
+
+# =============================================================================
+# DB Guardian Wave 3b: D3/D4/D5 — Policy engine, simulation helpers, approval gate
+# Delegates to test-db-guardian-w3b.sh and aggregates results.
+# Registered as --scope dbsafe-w3b.
+# Tests: D3 classify_operation, detect_cascade_risk, detect_unbounded, evaluate_policy (9 rules)
+#        D4 simulate_explain, simulate_rollback, simulate_dryrun (5 CLI types)
+#        D5 request_approval, check_approval (state store integration)
+# Minimum 35 tests; file provides 58 tests.
+# =============================================================================
+if should_run_section "DB Guardian Wave 3b"; then
+echo ""
+echo "--- DB Guardian Wave 3b: deterministic policy engine, simulation helpers, approval gate ---"
+
+_DBSAFE_W3B_TEST="$SCRIPT_DIR/test-db-guardian-w3b.sh"
+if [[ ! -f "$_DBSAFE_W3B_TEST" ]]; then
+    skip "dbsafe-w3b tests" "test-db-guardian-w3b.sh not found at $_DBSAFE_W3B_TEST"
+else
+    _DBSAFE_W3B_OUTPUT=$(bash "$_DBSAFE_W3B_TEST" 2>/dev/null) || true
+    _DBSAFE_W3B_EXIT=$?
+    # Parse results from the test output
+    _DBSAFE_W3B_PASSED=$(echo "$_DBSAFE_W3B_OUTPUT" | grep -c "^  PASS:" 2>/dev/null || true)
+    _DBSAFE_W3B_FAILED=$(echo "$_DBSAFE_W3B_OUTPUT" | grep -c "^  FAIL:" 2>/dev/null || true)
+    _DBSAFE_W3B_TOTAL=$(echo "$_DBSAFE_W3B_OUTPUT" | grep -E "^Results:" | grep -oE "[0-9]+ total" | grep -oE "[0-9]+" || true)
+    if [[ "$_DBSAFE_W3B_FAILED" -eq 0 && -n "$_DBSAFE_W3B_TOTAL" ]]; then
+        pass "dbsafe-w3b: all ${_DBSAFE_W3B_TOTAL} tests passed (${_DBSAFE_W3B_PASSED} assertions)"
+    else
+        _DBSAFE_W3B_FAIL_DETAILS=$(echo "$_DBSAFE_W3B_OUTPUT" | grep "^  FAIL:" | head -5 | tr '\n' '; ')
+        fail "dbsafe-w3b" "${_DBSAFE_W3B_FAILED} failed (${_DBSAFE_W3B_PASSED}/${_DBSAFE_W3B_TOTAL:-?} passed): ${_DBSAFE_W3B_FAIL_DETAILS}"
+        echo "$_DBSAFE_W3B_OUTPUT"
+    fi
+fi
+
+echo ""
+fi # end: dbsafe-w3b
 
 # --- Summary ---
 echo "==========================="
