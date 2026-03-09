@@ -210,14 +210,16 @@ if echo "$COMMAND" | grep -qiE '\b(DROP\s+(DATABASE|TABLE|SCHEMA)|TRUNCATE\s+TAB
 fi
 
 # --- Check 0.75: Prevent ALL cd/pushd into worktree directories ---
-# @decision DEC-GUARD-CWD-003 (carried forward from guard.sh)
-# @title Deny ALL cd/pushd into .worktrees/ — both bare and chained
+# @decision DEC-GUARD-CWD-004
+# @title Allow subshell-wrapped cd into .worktrees/ regardless of internal spacing
 # @status accepted
-# @rationale posix_spawn ENOENT if worktree is deleted while CWD is inside it.
-#   Prevention is the only reliable fix — updatedInput is not supported in PreToolUse.
+# @rationale The previous check required "( " (paren + space) but agents consistently
+#   write "(cd ..." without the space. Subshell wrapping ensures CWD reverts on exit,
+#   making the cd architecturally safe. Benchmark data shows 5-13 tool_errors per trial
+#   from this false denial, wasting 50-100K tokens per trial on retry loops.
 declare_gate "worktree-cd-guard" "Deny ALL cd/pushd into .worktrees/" "deny"
-if [[ "$COMMAND" == "( "* ]]; then
-    : # Already subshell-wrapped, pass through
+if [[ "$COMMAND" == "("* ]]; then
+    : # Already subshell-wrapped: CWD reverts when subshell exits, safe
 elif echo "$_stripped_cmd" | grep -qE '\b(cd|pushd)\b[^;&|]*\.worktrees/[^/[:space:];&|]+([[:space:]]|$|&&|;|\|\|)'; then
     log_info "GUARD-CWD" "Check 0.75: Denying ALL cd/pushd into .worktrees/"
     emit_deny "CWD protection: cd/pushd into .worktrees/ denied — persistent CWD in a deletable directory causes posix_spawn ENOENT if the worktree is later removed, bricking ALL hooks. Use per-command subshell: ( cd .worktrees/<name> && <cmd> ) or git -C .worktrees/<name> for git commands."

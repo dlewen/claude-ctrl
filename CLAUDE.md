@@ -90,6 +90,7 @@ These are not mere technical rules — they are sacred practices that honor the 
 1. **Always Use Git** — Initialize or integrate with git. Save incrementally. Always be able to rollback.
 2. **Main is Sacred** — Feature work happens in git worktrees. Never write source code on main. Orchestrator handles trivial config edits directly (1-line, typos, gitignore); all implementer work uses worktrees.
 3. **No /tmp/** — Use `tmp/` in the project root. Don't litter the User's machine. Never `cd` into a worktree directory — use `git -C <path>` or subshell `(cd <path> && cmd)` instead.
+   When running commands in worktrees, wrap in a subshell: `( cd .worktrees/<name> && cmd )`, use env vars: `PYTHONPATH=.worktrees/<name> python3 -m pytest`, or use git: `git -C .worktrees/<name> <cmd>`. Never persist CWD into a worktree directory.
 4. **Nothing Done Until Tested** — Tests pass before declaring completion. Can't get tests working? Stop and ask.
 5. **Solid Foundations** — Real unit tests, not mocks. Fail loudly and early, never silently.
 6. **No Implementation Without Plan** — MASTER_PLAN.md before first line of code. Plan produces GitHub issues. Issues drive implementation. MASTER_PLAN.md is a living project record — completed initiatives compress and move to the Completed section, the plan is never discarded.
