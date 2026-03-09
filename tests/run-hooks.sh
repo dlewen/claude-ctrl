@@ -118,6 +118,7 @@ _print_scope_usage() {
     echo "  dbsafe-w2b  — DB safety Wave 2b: migration allowlist, IaC/container/ORM interception (B5/B6/B7/B8)"
     echo "  dbsafe-w3a  — DB Guardian Wave 3a: agent definition + JSON handoff protocol (D1/D2)"
     echo "  dbsafe-w3b  — DB Guardian Wave 3b: policy engine, simulation helpers, approval gate (D3/D4/D5)"
+    echo "  dbsafe-w4   — MCP Governance (Wave 4 Task E): E1 tool ID, E2 SQL validation, E3 capability filter, E4 rate limit"
     echo ""
     echo "No --scope = run all tests (default, backward compatible)."
 }
@@ -175,6 +176,7 @@ _scope_pattern() {
         dbsafe-w2b)        echo "db-safety-lib\.sh unit tests.*Wave 2b" ;;
         dbsafe-w3a)        echo "db-guardian-lib\.sh unit tests.*Wave 3a" ;;
         dbsafe-w3b)        echo "DB Guardian Wave 3b" ;;
+        dbsafe-w4)         echo "MCP Governance Wave 4" ;;
         *)                 echo "" ;;
     esac
 }
@@ -3139,6 +3141,39 @@ fi
 
 echo ""
 fi # end: dbsafe-w3b
+
+# =============================================================================
+# MCP Governance Wave 4 (Task E): E1-E4
+# Delegates to test-mcp-w4.sh and aggregates results.
+# Registered as --scope dbsafe-w4.
+# Tests: E1 tool identification (12), E2 SQL validation (8), E3 capability filter (11),
+#        E4 rate limiting (2), Integration signals (5)
+# Total: 42 tests.
+# =============================================================================
+if should_run_section "MCP Governance Wave 4"; then
+echo ""
+echo "--- MCP Governance Wave 4 (Task E): E1 tool ID, E2 SQL validation, E3 capability, E4 rate limit ---"
+
+_DBSAFE_W4_TEST="$SCRIPT_DIR/test-mcp-w4.sh"
+if [[ ! -f "$_DBSAFE_W4_TEST" ]]; then
+    skip "dbsafe-w4 tests" "test-mcp-w4.sh not found at $_DBSAFE_W4_TEST"
+else
+    _DBSAFE_W4_OUTPUT=$(bash "$_DBSAFE_W4_TEST" 2>/dev/null) || true
+    _DBSAFE_W4_EXIT=$?
+    _DBSAFE_W4_PASSED=$(echo "$_DBSAFE_W4_OUTPUT" | grep -c "^  PASS:" 2>/dev/null || true)
+    _DBSAFE_W4_FAILED=$(echo "$_DBSAFE_W4_OUTPUT" | grep -c "^  FAIL:" 2>/dev/null || true)
+    _DBSAFE_W4_TOTAL=$(echo "$_DBSAFE_W4_OUTPUT" | grep -E "^Results:" | grep -oE "[0-9]+ total" | grep -oE "[0-9]+" || true)
+    if [[ "$_DBSAFE_W4_FAILED" -eq 0 && -n "$_DBSAFE_W4_TOTAL" ]]; then
+        pass "dbsafe-w4: all ${_DBSAFE_W4_TOTAL} tests passed (${_DBSAFE_W4_PASSED} assertions)"
+    else
+        _DBSAFE_W4_FAIL_DETAILS=$(echo "$_DBSAFE_W4_OUTPUT" | grep "^  FAIL:" | head -5 | tr '\n' '; ')
+        fail "dbsafe-w4" "${_DBSAFE_W4_FAILED} failed (${_DBSAFE_W4_PASSED}/${_DBSAFE_W4_TOTAL:-?} passed): ${_DBSAFE_W4_FAIL_DETAILS}"
+        echo "$_DBSAFE_W4_OUTPUT"
+    fi
+fi
+
+echo ""
+fi # end: dbsafe-w4
 
 # --- Summary ---
 echo "==========================="
