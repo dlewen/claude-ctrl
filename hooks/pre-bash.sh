@@ -372,7 +372,26 @@ if echo "$_stripped_cmd" | grep -qE 'git\s+[^|;&]*\bcommit([^a-zA-Z0-9-]|$)'; th
         elif GIT_DIR=$(git -C "$TARGET_DIR" rev-parse --absolute-git-dir 2>/dev/null) && [[ -f "$GIT_DIR/MERGE_HEAD" ]]; then
             : # Allow — completing a merge
         else
-            emit_deny "Cannot commit directly to $CURRENT_BRANCH. Sacred Practice #2: Main is sacred. Create a worktree: git worktree add .worktrees/feature-name $CURRENT_BRANCH"
+            # Part of DEC-RECK-011: detect governance file commits on main for specific error message
+            # before the generic "main is sacred" deny. This provides actionable context when
+            # agents attempt to commit agents/*.md, docs/*.md, CLAUDE.md, or ARCHITECTURE.md.
+            _C2_STAGED_FILES=$(git -C "$TARGET_DIR" diff --cached --name-only 2>/dev/null || echo "")
+            _C2_GOV_FILES=""
+            if [[ -n "$_C2_STAGED_FILES" ]]; then
+                while IFS= read -r _c2_f; do
+                    [[ -z "$_c2_f" ]] && continue
+                    _c2_base=$(basename "$_c2_f")
+                    if [[ "$_c2_f" =~ agents/[^/]+\.md$ || "$_c2_f" =~ docs/[^/]+\.md$ || \
+                          "$_c2_base" == "CLAUDE.md" || "$_c2_base" == "ARCHITECTURE.md" ]]; then
+                        _C2_GOV_FILES="${_C2_GOV_FILES:+$_C2_GOV_FILES, }$_c2_f"
+                    fi
+                done <<< "$_C2_STAGED_FILES"
+            fi
+            if [[ -n "$_C2_GOV_FILES" ]]; then
+                emit_deny "Cannot commit governance files ($_C2_GOV_FILES) on $CURRENT_BRANCH. Sacred Practice #2: governance-critical markdown (agents/, docs/, CLAUDE.md, ARCHITECTURE.md) requires worktree isolation — changes propagate to all future agent dispatches (DEC-RECK-011). Suggested: git worktree add .worktrees/<name> -b <branch>"
+            else
+                emit_deny "Cannot commit directly to $CURRENT_BRANCH. Sacred Practice #2: Main is sacred. Create a worktree: git worktree add .worktrees/feature-name $CURRENT_BRANCH"
+            fi
         fi
     fi
 fi

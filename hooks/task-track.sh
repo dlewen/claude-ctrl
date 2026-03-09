@@ -152,11 +152,45 @@ if [[ "$AGENT_TYPE" == "guardian" ]]; then
     #   could be abused to bypass the gate on source changes. Mitigation: the annotation
     #   is documented and explicit; any misuse is visible in the dispatch prompt audit
     #   trail (traces). See #105.
+    #
+    # @decision DEC-RECK-011b
+    # @title Narrow @plan-update bypass to plan-only commits
+    # @status accepted
+    # @rationale @plan-update was designed for MASTER_PLAN.md amendments that don't
+    #   need testing. It was being used (or could be used) to bypass proof gates on
+    #   commits that include agents/*.md and docs/*.md changes. Verify staged files
+    #   before granting bypass: only allow if ALL staged files are plan-related
+    #   (MASTER_PLAN.md, CHANGELOG.md, decision-config*.json, decisions*.json).
+    #   If any other file is staged, deny the bypass and require proper verification.
     _GUARD_PROMPT=$(get_field '.tool_input.prompt' 2>/dev/null || echo "")
     _PROOF_BYPASS=false
     if echo "$_GUARD_PROMPT" | grep -qE '@plan-update|@no-source'; then
-        _PROOF_BYPASS=true
-        log_info "guardian-proof-gate" "plan-only merge bypass (@plan-update or @no-source in prompt) — proof gate skipped" 2>/dev/null || true
+        # Check staged files — only grant bypass if ALL staged files are plan-related
+        _STAGED_FILES=$(git -C "$PROJECT_ROOT" diff --cached --name-only 2>/dev/null || echo "")
+        _NON_PLAN_FILES=""
+        if [[ -n "$_STAGED_FILES" ]]; then
+            while IFS= read -r _staged_f; do
+                [[ -z "$_staged_f" ]] && continue
+                _basename_f=$(basename "$_staged_f")
+                # Plan-allowed files: MASTER_PLAN.md, CHANGELOG.md, decision-config*.json, decisions*.json
+                case "$_basename_f" in
+                    MASTER_PLAN.md|CHANGELOG.md|decision-config*.json|decisions*.json)
+                        ;; # Allowed — plan-related file
+                    *)
+                        _NON_PLAN_FILES="${_NON_PLAN_FILES:+$_NON_PLAN_FILES, }$_staged_f"
+                        ;;
+                esac
+            done <<< "$_STAGED_FILES"
+        fi
+
+        if [[ -n "$_NON_PLAN_FILES" ]]; then
+            # Non-plan files staged — refuse the bypass, require proper verification
+            log_info "guardian-proof-gate" "@plan-update bypass DENIED: non-plan files staged: $_NON_PLAN_FILES" 2>/dev/null || true
+            emit_deny "Cannot bypass proof gate with @plan-update: non-plan files are staged ($_NON_PLAN_FILES). @plan-update is only valid when ALL staged files are plan-related (MASTER_PLAN.md, CHANGELOG.md, decision-config*.json). Remove staged non-plan files or complete verification before dispatching Guardian."
+        else
+            _PROOF_BYPASS=true
+            log_info "guardian-proof-gate" "plan-only merge bypass (@plan-update or @no-source in prompt) — all staged files are plan-related — proof gate skipped" 2>/dev/null || true
+        fi
     fi
     PROOF_FILE=$(resolve_proof_file)
     [[ ! -f "$PROOF_FILE" ]] && PROOF_FILE=""
