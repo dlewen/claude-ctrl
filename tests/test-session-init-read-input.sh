@@ -47,101 +47,42 @@ _CLEANUP_DIRS=()
 trap '[[ ${#_CLEANUP_DIRS[@]} -gt 0 ]] && rm -rf "${_CLEANUP_DIRS[@]}" 2>/dev/null; true' EXIT
 
 # ============================================================================
-# Part 1: session-init.sh — explicit CLAUDE_SESSION_ID extraction
+# Part 1: session-init.sh — uses init_hook (final design)
 # ============================================================================
+# These tests verify the final state: session-init.sh calls `init_hook`
+# (not bare HOOK_INPUT=$(read_input)) and has no duplicated manual extraction.
 
-test_explicit_sid_extraction_present() {
+test_session_init_uses_init_hook() {
     run_test
-    # The fix requires explicit extraction of CLAUDE_SESSION_ID from HOOK_INPUT
-    # in the parent shell — not relying on read_input()'s subshell export.
-    # Pattern: CLAUDE_SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id ...')
-    if grep -qE 'CLAUDE_SESSION_ID=.*jq.*session_id' "$SESSION_INIT"; then
-        pass_test "session-init.sh contains explicit CLAUDE_SESSION_ID jq extraction"
+    # session-init.sh must call init_hook (bare function call, no assignment)
+    if grep -qE '^init_hook$' "$SESSION_INIT"; then
+        pass_test "session-init.sh calls init_hook (bare, no assignment)"
     else
-        fail_test "session-init.sh missing explicit CLAUDE_SESSION_ID extraction" \
-            "Add: CLAUDE_SESSION_ID=\$(printf '%s' \"\$HOOK_INPUT\" | jq -r '.session_id // empty') after HOOK_INPUT=\$(read_input)"
+        fail_test "session-init.sh does not call init_hook" \
+            "Replace HOOK_INPUT=\$(read_input) with bare: init_hook"
     fi
 }
 
-test_explicit_sid_extraction_after_hook_input() {
+test_session_init_no_raw_read_input() {
     run_test
-    # Extraction must come after HOOK_INPUT=$(read_input) (non-comment line)
-    local ri_line sid_line
-    ri_line=$(grep -n 'HOOK_INPUT=$(read_input)' "$SESSION_INIT" | grep -v '^[^:]*:#' | head -1 | cut -d: -f1)
-    sid_line=$(grep -n 'CLAUDE_SESSION_ID=.*jq.*session_id' "$SESSION_INIT" | head -1 | cut -d: -f1)
-
-    if [[ -z "$ri_line" ]]; then
-        fail_test "HOOK_INPUT=\$(read_input) not found — cannot check ordering" ""
-        return
-    fi
-    if [[ -z "$sid_line" ]]; then
-        fail_test "CLAUDE_SESSION_ID jq extraction not found — cannot check ordering" ""
-        return
-    fi
-    if [[ "$sid_line" -gt "$ri_line" ]]; then
-        pass_test "CLAUDE_SESSION_ID extraction (line $sid_line) after HOOK_INPUT=\$(read_input) (line $ri_line)"
+    # session-init.sh must not use bare HOOK_INPUT=$(read_input) anymore
+    if ! grep -qE '^HOOK_INPUT=\$\(read_input\)' "$SESSION_INIT"; then
+        pass_test "session-init.sh does not use bare HOOK_INPUT=\$(read_input)"
     else
-        fail_test "CLAUDE_SESSION_ID extraction (line $sid_line) appears BEFORE HOOK_INPUT=\$(read_input) (line $ri_line)" \
-            "Must extract after read_input() so HOOK_INPUT contains the JSON"
+        fail_test "session-init.sh still has bare HOOK_INPUT=\$(read_input)" \
+            "Replace with: init_hook"
     fi
 }
 
-test_explicit_sid_extraction_functional() {
+test_session_init_no_manual_sid_block() {
     run_test
-    # Pipe JSON with session_id through a subprocess that applies the fix pattern.
-    # Verify CLAUDE_SESSION_ID is set in the parent shell context.
-    local tmpscript
-    tmpscript=$(mktemp /tmp/test-sid-XXXXXX.sh)
-    # shellcheck disable=SC2064
-    trap "rm -f '$tmpscript'" RETURN
-
-    cat > "$tmpscript" <<'SCRIPT'
-source "$1" 2>/dev/null || true
-# shellcheck disable=SC2034
-HOOK_INPUT=$(read_input)
-# Explicit parent-shell extraction (the Part 1 fix)
-if [[ -z "${CLAUDE_SESSION_ID:-}" && -n "$HOOK_INPUT" ]]; then
-    CLAUDE_SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
-    export CLAUDE_SESSION_ID
-fi
-echo "${CLAUDE_SESSION_ID:-UNSET}"
-SCRIPT
-
-    local result
-    result=$(echo '{"session_id": "sid-explicit-test", "cwd": "/tmp"}' \
-        | bash "$tmpscript" "$SOURCE_LIB" 2>/dev/null || echo "ERROR")
-
-    if [[ "$result" == "sid-explicit-test" ]]; then
-        pass_test "explicit extraction sets CLAUDE_SESSION_ID='sid-explicit-test' in parent shell"
+    # The manual extraction block from the intermediate fix must not be in session-init.sh.
+    # init_hook() in log.sh is the single source of truth now.
+    if ! grep -qE 'CLAUDE_SESSION_ID=.*jq.*session_id' "$SESSION_INIT"; then
+        pass_test "session-init.sh has no duplicated manual CLAUDE_SESSION_ID extraction"
     else
-        fail_test "explicit extraction failed" "expected 'sid-explicit-test', got '$result'"
-    fi
-}
-
-test_sid_guards_on_empty_hook_input() {
-    run_test
-    # When HOOK_INPUT is empty (no stdin), guard prevents jq crash and CLAUDE_SESSION_ID stays unset.
-    local tmpscript
-    tmpscript=$(mktemp /tmp/test-sid-XXXXXX.sh)
-    # shellcheck disable=SC2064
-    trap "rm -f '$tmpscript'" RETURN
-
-    cat > "$tmpscript" <<'SCRIPT'
-HOOK_INPUT=""  # simulate no stdin
-if [[ -z "${CLAUDE_SESSION_ID:-}" && -n "$HOOK_INPUT" ]]; then
-    CLAUDE_SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
-    export CLAUDE_SESSION_ID
-fi
-echo "${CLAUDE_SESSION_ID:-UNSET}"
-SCRIPT
-
-    local result
-    result=$(bash "$tmpscript" 2>/dev/null || echo "ERROR")
-
-    if [[ "$result" == "UNSET" ]]; then
-        pass_test "empty HOOK_INPUT guard: CLAUDE_SESSION_ID stays UNSET when no stdin"
-    else
-        fail_test "guard failed" "expected UNSET, got '$result'"
+        fail_test "session-init.sh still has manual CLAUDE_SESSION_ID extraction" \
+            "Remove: CLAUDE_SESSION_ID=\$(... jq ...session_id...) — init_hook() handles this"
     fi
 }
 
@@ -425,17 +366,239 @@ test_session_lib_shellcheck() {
 }
 
 # ============================================================================
+# Part 3: init_hook() in log.sh — the systemic fix
+# ============================================================================
+# Tests for the init_hook() wrapper function that replaces bare
+# HOOK_INPUT=$(read_input) calls in all hooks. init_hook() sets HOOK_INPUT
+# as a global side effect (no command substitution), so CLAUDE_SESSION_ID
+# propagates correctly to the parent shell every time.
+
+LOG_SH="${SCRIPT_DIR}/../hooks/log.sh"
+
+HOOK_LIST=(
+    notify.sh
+    pre-bash.sh
+    pre-write.sh
+    post-write.sh
+    prompt-submit.sh
+    skill-result.sh
+    lint.sh
+    stop.sh
+    pre-ask.sh
+    test-runner.sh
+    post-task.sh
+    subagent-start.sh
+    task-track.sh
+    session-init.sh
+)
+
+test_init_hook_defined_in_log_sh() {
+    run_test
+    # init_hook() must be defined in log.sh right after read_input()
+    if grep -qE '^init_hook\(\)' "$LOG_SH"; then
+        pass_test "log.sh defines init_hook() function"
+    else
+        fail_test "log.sh missing init_hook() function definition" \
+            "Add init_hook() after read_input() in log.sh"
+    fi
+}
+
+test_init_hook_sets_hook_input_global() {
+    run_test
+    # init_hook() must assign to HOOK_INPUT as a global (no local keyword, no subshell)
+    local tmpscript
+    tmpscript=$(mktemp /tmp/test-inithook-XXXXXX.sh)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpscript'" RETURN
+
+    cat > "$tmpscript" <<'SCRIPT'
+HOOK_INPUT=""
+source "$1"  # source log.sh
+# Correct usage: stdin is piped to the script, not to the function.
+# init_hook reads from script stdin (file descriptor 0 of the process).
+init_hook
+echo "${HOOK_INPUT:-EMPTY}"
+SCRIPT
+
+    local result
+    result=$(echo '{"session_id":"sid-inithook-test","cwd":"/tmp"}' \
+        | bash "$tmpscript" "$LOG_SH" 2>/dev/null || echo "ERROR")
+    if [[ "$result" == *'"session_id"'* ]]; then
+        pass_test "init_hook() sets HOOK_INPUT global (contains session_id JSON)"
+    else
+        fail_test "init_hook() did not set HOOK_INPUT global" \
+            "got: '$result'"
+    fi
+}
+
+test_init_hook_extracts_sid_in_parent_shell() {
+    run_test
+    # The core test: after init_hook(), CLAUDE_SESSION_ID must be set in the parent shell.
+    # This is impossible with bare HOOK_INPUT=$(read_input) due to subshell scoping.
+    local tmpscript
+    tmpscript=$(mktemp /tmp/test-inithook-XXXXXX.sh)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpscript'" RETURN
+
+    cat > "$tmpscript" <<'SCRIPT'
+unset CLAUDE_SESSION_ID
+HOOK_INPUT=""
+source "$1"  # source log.sh
+init_hook
+echo "${CLAUDE_SESSION_ID:-UNSET}"
+SCRIPT
+
+    local result
+    result=$(echo '{"session_id":"sid-inithook-parent","cwd":"/tmp"}' \
+        | bash "$tmpscript" "$LOG_SH" 2>/dev/null || echo "ERROR")
+    if [[ "$result" == "sid-inithook-parent" ]]; then
+        pass_test "init_hook() extracts CLAUDE_SESSION_ID='sid-inithook-parent' in parent shell"
+    else
+        fail_test "init_hook() did NOT set CLAUDE_SESSION_ID in parent shell" \
+            "got '$result', expected 'sid-inithook-parent'"
+    fi
+}
+
+test_init_hook_does_not_override_existing_sid() {
+    run_test
+    # If CLAUDE_SESSION_ID is already set (e.g., from env), init_hook() must not overwrite it.
+    local tmpscript
+    tmpscript=$(mktemp /tmp/test-inithook-XXXXXX.sh)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpscript'" RETURN
+
+    cat > "$tmpscript" <<'SCRIPT'
+export CLAUDE_SESSION_ID="already-set-value"
+HOOK_INPUT=""
+source "$1"  # source log.sh
+init_hook
+echo "${CLAUDE_SESSION_ID:-UNSET}"
+SCRIPT
+
+    local result
+    result=$(echo '{"session_id":"new-value-from-json","cwd":"/tmp"}' \
+        | bash "$tmpscript" "$LOG_SH" 2>/dev/null || echo "ERROR")
+    if [[ "$result" == "already-set-value" ]]; then
+        pass_test "init_hook() preserves pre-existing CLAUDE_SESSION_ID='already-set-value'"
+    else
+        fail_test "init_hook() overwrote existing CLAUDE_SESSION_ID" \
+            "got '$result', expected 'already-set-value'"
+    fi
+}
+
+test_init_hook_guards_empty_stdin() {
+    run_test
+    # When stdin is empty (or hook receives no JSON), init_hook() must not crash.
+    local tmpscript
+    tmpscript=$(mktemp /tmp/test-inithook-XXXXXX.sh)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpscript'" RETURN
+
+    cat > "$tmpscript" <<'SCRIPT'
+unset CLAUDE_SESSION_ID
+HOOK_INPUT=""
+source "$1"  # source log.sh
+init_hook
+echo "exit:$?"
+echo "sid:${CLAUDE_SESSION_ID:-UNSET}"
+SCRIPT
+
+    local result
+    result=$(echo "" | bash "$tmpscript" "$LOG_SH" 2>/dev/null || echo "ERROR")
+    if echo "$result" | grep -q 'exit:0' && echo "$result" | grep -q 'sid:UNSET'; then
+        pass_test "init_hook() handles empty stdin: exits cleanly, CLAUDE_SESSION_ID=UNSET"
+    else
+        fail_test "init_hook() did not handle empty stdin correctly" \
+            "got: '$result'"
+    fi
+}
+
+test_all_hooks_use_init_hook_not_raw_read_input() {
+    run_test
+    local hooks_with_raw=()
+    local wt_hooks="${SCRIPT_DIR}/../hooks"
+
+    for hook in "${HOOK_LIST[@]}"; do
+        local hook_file="${wt_hooks}/${hook}"
+        [[ -f "$hook_file" ]] || continue
+        # Check for raw HOOK_INPUT=$(read_input) that is NOT inside a function definition
+        # (session-end.sh has _SESSION_END_INPUT=$(cat) — different pattern, not in list)
+        if grep -qE '^HOOK_INPUT=\$\(read_input\)' "$hook_file"; then
+            hooks_with_raw+=("$hook")
+        fi
+    done
+
+    if [[ ${#hooks_with_raw[@]} -eq 0 ]]; then
+        pass_test "all 14 hooks use init_hook instead of bare HOOK_INPUT=\$(read_input)"
+    else
+        fail_test "${#hooks_with_raw[@]} hook(s) still use bare HOOK_INPUT=\$(read_input)" \
+            "Offenders: ${hooks_with_raw[*]}"
+    fi
+}
+
+test_session_init_no_duplicate_sid_extraction() {
+    run_test
+    # After migration to init_hook, session-init.sh must NOT have the manual
+    # if [[ -z "${CLAUDE_SESSION_ID:-}" ]] extraction block (init_hook handles it now).
+    local manual_count
+    manual_count=$(grep -c 'if \[\[ -z.*CLAUDE_SESSION_ID' "$SESSION_INIT" 2>/dev/null || echo "0")
+    manual_count="${manual_count%%$'\n'*}"  # strip any trailing newline from grep -c
+    if [[ "${manual_count:-0}" -eq 0 ]]; then
+        pass_test "session-init.sh has no duplicate manual CLAUDE_SESSION_ID extraction block"
+    else
+        fail_test "session-init.sh still has manual CLAUDE_SESSION_ID extraction block ($manual_count match(es))" \
+            "Remove the manual block — init_hook() in log.sh handles this now"
+    fi
+}
+
+test_log_sh_shellcheck() {
+    run_test
+    if ! command -v shellcheck >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}SKIP${NC} shellcheck not installed"
+        TESTS_RUN=$(( TESTS_RUN - 1 ))
+        return
+    fi
+    local output
+    output=$(shellcheck -S warning "$LOG_SH" 2>&1 || true)
+    local count
+    count=$(echo "$output" | { grep 'SC[0-9]' || true; } | wc -l | tr -d ' ')
+    if [[ "${count:-0}" -eq 0 ]]; then
+        pass_test "log.sh: no shellcheck warnings after adding init_hook()"
+    else
+        fail_test "log.sh has $count shellcheck warning(s)" "$output"
+    fi
+}
+
+test_hooks_pass_bash_syntax_after_migration() {
+    run_test
+    local wt_hooks="${SCRIPT_DIR}/../hooks"
+    local failed_hooks=()
+    for hook in "${HOOK_LIST[@]}"; do
+        local hook_file="${wt_hooks}/${hook}"
+        [[ -f "$hook_file" ]] || continue
+        if ! bash -n "$hook_file" 2>/dev/null; then
+            failed_hooks+=("$hook")
+        fi
+    done
+    if [[ ${#failed_hooks[@]} -eq 0 ]]; then
+        pass_test "all 14 migrated hooks pass bash -n syntax check"
+    else
+        fail_test "${#failed_hooks[@]} hook(s) fail bash -n syntax check" \
+            "Offenders: ${failed_hooks[*]}"
+    fi
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 
 echo "Testing two-part fix: explicit SID extraction + cross-PID sibling cache fallback"
 echo ""
 
-echo "--- Part 1: session-init.sh explicit CLAUDE_SESSION_ID extraction ---"
-test_explicit_sid_extraction_present
-test_explicit_sid_extraction_after_hook_input
-test_explicit_sid_extraction_functional
-test_sid_guards_on_empty_hook_input
+echo "--- Part 1: session-init.sh uses init_hook (final design) ---"
+test_session_init_uses_init_hook
+test_session_init_no_raw_read_input
+test_session_init_no_manual_sid_block
 
 echo ""
 echo "--- Part 2: session-lib.sh cross-PID sibling cache fallback ---"
@@ -450,7 +613,19 @@ echo "--- Regression: DEC-LIFETIME-PERSIST-001 unchanged ---"
 test_own_cache_file_still_read_when_exists
 
 echo ""
+echo "--- Part 3: init_hook() systemic fix ---"
+test_init_hook_defined_in_log_sh
+test_init_hook_sets_hook_input_global
+test_init_hook_extracts_sid_in_parent_shell
+test_init_hook_does_not_override_existing_sid
+test_init_hook_guards_empty_stdin
+test_all_hooks_use_init_hook_not_raw_read_input
+test_session_init_no_duplicate_sid_extraction
+test_hooks_pass_bash_syntax_after_migration
+
+echo ""
 echo "--- Shellcheck compliance ---"
+test_log_sh_shellcheck
 test_session_init_shellcheck
 test_session_lib_shellcheck
 

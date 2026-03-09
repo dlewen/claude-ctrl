@@ -78,6 +78,34 @@ read_input() {
     echo "$HOOK_INPUT"
 }
 
+# @decision DEC-INIT-HOOK-001
+# @title init_hook() — replace HOOK_INPUT=$(read_input) in all hooks
+# @status accepted
+# @rationale HOOK_INPUT=$(read_input) spawns a bash command-substitution subshell.
+#   The `export CLAUDE_SESSION_ID` inside read_input() runs in that subshell and
+#   NEVER propagates back to the parent shell. Every hook using
+#   ${CLAUDE_SESSION_ID:-$$} falls back to $$ (PID per process), creating a
+#   different cache file name per hook process.  This broke:
+#     - statusline cache lifetime_tokens (DEC-LIFETIME-PERSIST-001 reads wrong file)
+#     - auto-verify flow (post-task.sh session fallback requires CLAUDE_SESSION_ID)
+#     - subagent tracker scoping (.subagent-tracker-$$)
+#     - orchestrator SID detection
+#   init_hook() reads stdin directly into HOOK_INPUT as a global variable (no
+#   command substitution, no subshell) and then extracts CLAUDE_SESSION_ID in
+#   the same parent shell. All hooks call `init_hook` (bare, no assignment) at
+#   the top — HOOK_INPUT and CLAUDE_SESSION_ID are then available as globals.
+#   read_input() is kept for backwards compatibility with any direct callers
+#   (tests that exercise it directly).
+init_hook() {
+    if [[ -z "$HOOK_INPUT" ]]; then
+        HOOK_INPUT=$(cat)
+        if [[ -z "${CLAUDE_SESSION_ID:-}" && -n "$HOOK_INPUT" ]]; then
+            CLAUDE_SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+            export CLAUDE_SESSION_ID
+        fi
+    fi
+}
+
 get_field() {
     local path="$1"
     echo "$HOOK_INPUT" | jq -r "$path // empty" 2>/dev/null

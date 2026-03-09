@@ -50,7 +50,7 @@ source "$(dirname "$0")/source-lib.sh"
 require_trace
 require_session
 
-HOOK_INPUT=$(read_input)
+init_hook
 TOOL_NAME=$(echo "$HOOK_INPUT" | jq -r '.tool_name // empty' 2>/dev/null || echo "")
 SUBAGENT_TYPE=$(echo "$HOOK_INPUT" | jq -r '.tool_input.subagent_type // empty' 2>/dev/null || echo "")
 

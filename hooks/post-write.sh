@@ -53,7 +53,7 @@ if [[ "${HOOK_GATE_SCAN:-}" == "1" ]]; then
     exit 0
 fi
 
-HOOK_INPUT=$(read_input)
+init_hook
 FILE_PATH=$(get_field '.tool_input.file_path')
 
 # Exit silently if no file path

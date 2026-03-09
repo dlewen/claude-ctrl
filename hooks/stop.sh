@@ -74,7 +74,7 @@ require_plan
 require_session
 # require_trace and require_doc deferred to inside their gated blocks (DEC-PERF-004)
 
-HOOK_INPUT=$(read_input)
+init_hook
 
 # ============================================================================
 # Re-firing guard — stop_hook_active prevents infinite Stop→generate→Stop loops

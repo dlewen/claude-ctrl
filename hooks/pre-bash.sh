@@ -105,7 +105,7 @@ if [[ "${HOOK_GATE_SCAN:-}" == "1" ]]; then
     exit 0
 fi
 
-HOOK_INPUT=$(read_input)
+init_hook
 COMMAND=$(get_field '.tool_input.command')
 # CWD from the hook input JSON — used by CWD-safety checks
 CWD=$(get_field '.cwd')

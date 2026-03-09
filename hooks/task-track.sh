@@ -22,7 +22,7 @@ require_session
 
 enable_fail_closed "task-track"
 
-HOOK_INPUT=$(read_input)
+init_hook
 AGENT_TYPE=$(get_field '.tool_input.subagent_type')
 AGENT_TYPE="${AGENT_TYPE:-unknown}"
 

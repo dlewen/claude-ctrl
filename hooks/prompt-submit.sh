@@ -20,7 +20,7 @@ set -euo pipefail
 _HOOK_NAME="prompt-submit"
 source "$(dirname "$0")/source-lib.sh"
 
-HOOK_INPUT=$(read_input)
+init_hook
 PROMPT=$(get_field '.prompt')
 
 # --- Verification fast path ---

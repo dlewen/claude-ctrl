@@ -21,7 +21,7 @@ require_plan
 require_session
 require_trace
 
-HOOK_INPUT=$(read_input)
+init_hook
 AGENT_TYPE=$(get_field '.agent_type')
 
 PROJECT_ROOT=$(detect_project_root)
