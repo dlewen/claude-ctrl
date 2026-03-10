@@ -195,7 +195,8 @@ project's institutional memory.
 ## Active Initiatives
 
 ### Initiative: Governance Efficiency
-**Status:** completed
+**Status:** reverted (2b1f32a, 2026-03-10)
+**Revert Rationale:** All 5 commits reverted (2,524 lines removed). W1 keyword cache keyed on GIT_DIRTY_COUNT — invalidated on every file write, 0% hit rate. W2 cross-hook caching added complexity without proportional benefit. Two out-of-scope commits (T2 backstop a94b562, governor wiring eed29d1) landed during same session — T2 blocked auto-verify with impossible regex, governor wiring injected signals unconditionally. Cumulative effect: governance signal overload degrading agent performance. See #222 for governor wiring redesign. The underlying goal (reduce overhead) remains valid; implementation approach was flawed.
 **Started:** 2026-03-09
 **Goal:** Reduce governance overhead (60-310% token excess on easy tasks) through targeted signal noise reduction, caching, and deduplication — without weakening any safety gates.
 
@@ -1116,7 +1117,7 @@ Main is sacred. Each wave dispatches parallel worktrees:
 
 | Initiative | Period | Phases | Key Decisions | Archived |
 |-----------|--------|--------|---------------|----------|
-| Governance Efficiency | 2026-03-09 | 2 (W1+W2) | DEC-EFF-001 through DEC-EFF-014 (14 decisions) | No |
+| Governance Efficiency | 2026-03-09 | 2 (W1+W2) | DEC-EFF-001 through DEC-EFF-014 (14 decisions) — REVERTED 2026-03-10 | No |
 | Production Remediation (Metanoia Suite) | 2026-02-28 to 2026-03-01 | 5 | DEC-HOOKS-001 thru DEC-TEST-006 | No |
 | State Management Reliability | 2026-03-01 to 2026-03-02 | 5 | DEC-STATE-007, DEC-STATE-008 + 8 test decisions | No |
 | Hook Consolidation Testing & Streamlining | 2026-03-02 | 4 | DEC-AUDIT-001, DEC-TIMING-001, DEC-DEDUP-001 | No |
@@ -1126,6 +1127,9 @@ Main is sacred. Each wave dispatches parallel worktrees:
 | Governance Signal Audit | 2026-03-07 to 2026-03-09 | 1 (W1-3) | DEC-AUDIT-002, DEC-RECK-013 | No |
 
 ### Governance Efficiency — Summary
+
+**REVERTED** (2b1f32a, 2026-03-10): All W1+W2 code removed. W1 keyword cache had 0% hit rate (GIT_DIRTY_COUNT invalidation). T2 backstop and governor wiring (out-of-scope) caused guardian failure cascades and context overload. Goal remains valid; approach was flawed. See #222 for governor wiring redesign.
+
 
 Reduced governance overhead (60-310% excess on easy tasks) through 9 targeted optimizations across 2 waves, without weakening any deny gates. W1 (noise reduction): demoted 2 low-value advisories to debug log, added churn/keyword/trajectory caches, doc-freshness fire-once-per-session — 6 optimizations across 4 hooks. W2 (deduplication): created `_cached_git_state()` (5s TTL) and `_cached_plan_state()` (10s TTL, 18 variables) in shared libraries, wired into 8 consumer hooks. Performance: 9.2x speedup on prompt-submit.sh (1.5s to 0.17s cache hit), 21x on stop.sh (6.7s to 0.32s). Safety invariant DEC-EFF-004 held: all deny gate counts preserved (pre-write: 14, pre-bash: 32, task-track: 9). 68/68 tests across 3 suites.
 
