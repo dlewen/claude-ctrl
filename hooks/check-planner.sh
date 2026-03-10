@@ -140,8 +140,8 @@ COMPLIANCE_PLANNER_EOF
 fi
 
 # --- Advisory checks (run after finalize to avoid timeout races) ---
-_cached_git_state "$PROJECT_ROOT" "$CLAUDE_DIR"
-_cached_plan_state "$PROJECT_ROOT" "$CLAUDE_DIR"
+get_git_state "$PROJECT_ROOT"
+get_plan_status "$PROJECT_ROOT"
 write_statusline_cache "$PROJECT_ROOT"
 
 ISSUES=()
@@ -217,8 +217,8 @@ else
         fi
 
         # Check 5: Has at least one active initiative with requirements
-        # PLAN_ACTIVE_INITIATIVES already set by _cached_plan_state above; use directly.
-        ACTIVE_COUNT="${PLAN_ACTIVE_INITIATIVES:-0}"
+        ACTIVE_COUNT=$(get_plan_status "$PROJECT_ROOT" 2>/dev/null; echo "${PLAN_ACTIVE_INITIATIVES:-0}")
+        # Re-run get_plan_status (already called above) — use the exported variable
         if [[ "${PLAN_ACTIVE_INITIATIVES:-0}" -gt 0 ]]; then
             # Validate that active initiative has Goals section
             ACTIVE_SECTION=$(awk '/^## Active Initiatives/{f=1} f && /^## Completed Initiatives|^## Parked/{exit} f{print}' "$PLAN" 2>/dev/null || echo "")
@@ -287,31 +287,6 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
     if [[ "$WORD_COUNT" -gt 1200 ]]; then
         ISSUES+=("Agent response too large (~${WORD_COUNT} words). Use TRACE_DIR for verbose output.")
     fi
-fi
-
-# --- Governor advisory: detect multi-wave initiatives ---
-# @decision DEC-GOV-WIRE-002
-# @title Emit governor advisory from check-planner.sh when multi-wave plan detected
-# @status accepted
-# @rationale The governor only fires if the orchestrator remembers to dispatch it.
-#   Since orchestrators are ephemeral with no memory, a nudge at the natural
-#   trigger point (after planner returns a multi-wave plan) ensures the governor
-#   recommendation is surfaced reliably. Advisory only — never blocks.
-#   Detection: grep RESPONSE_TEXT + PLAN for ##### Wave 2-9, Wave [2-9], or multi-wave patterns.
-#   Also checks the PLAN file itself since planner may have updated it.
-_GOV_MULTI_WAVE=false
-if [[ -n "$RESPONSE_TEXT" ]]; then
-    if echo "$RESPONSE_TEXT" | grep -qE '[Ww]ave [2-9]|#{4,5}\s+[Ww]ave|multi.?wave'; then
-        _GOV_MULTI_WAVE=true
-    fi
-fi
-if [[ "$_GOV_MULTI_WAVE" == "false" && -f "$PLAN" ]]; then
-    if grep -qE '[Ww]ave [2-9]|#{4,5}\s+[Ww]ave|multi.?wave' "$PLAN" 2>/dev/null; then
-        _GOV_MULTI_WAVE=true
-    fi
-fi
-if [[ "$_GOV_MULTI_WAVE" == "true" ]]; then
-    ISSUES+=("GOVERNOR ADVISORY: Planner returned a multi-wave initiative. Dispatch governor in health-pulse mode before implementation per DISPATCH.md.")
 fi
 
 # Build context message
