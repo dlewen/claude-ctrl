@@ -186,10 +186,25 @@ if [[ -e "$(dirname "$FILE_PATH")" ]]; then
                     #   only invalidate that worktree's proof status, not the project-wide
                     #   or other worktrees' proof status. W5-2: All proof state writes go to
                     #   SQLite via proof_state_set(). Flat-file writes removed.
+                    # @decision DEC-EPOCH-RESET-001
+                    # @title Epoch reset in post-write.sh before proof_state_set("pending")
+                    # @status accepted
+                    # @rationale After a commit cycle, proof state is "committed" (ordinal 4).
+                    #   Source code change invalidates the prior verification — but the lattice
+                    #   blocks regression from committed→pending (4→2) without an epoch bump.
+                    #   proof_epoch_reset() bumps the epoch, allowing the regression.
+                    #   Without this, the proof gate deadlocks after the first merge cycle (#227).
+                    # Epoch reset: source code change invalidates prior verification.
+                    # Without this, the lattice rejects regression from committed/verified to pending.
+                    _pw_current_status=$(PROJECT_ROOT="$PROJECT_ROOT" proof_state_get 2>/dev/null | cut -d'|' -f1 || echo "")
+                    if [[ "$_pw_current_status" == "committed" || "$_pw_current_status" == "verified" ]]; then
+                        PROJECT_ROOT="$PROJECT_ROOT" proof_epoch_reset 2>/dev/null || true
+                    fi
                     # Invalidate proof state: write "pending" to SQLite (sole authority since W5-2)
-                    # || true: proof_state_set returns 1 if the monotonic lattice rejects the
-                    # transition (DEC-PROOF-LATTICE-001). Non-fatal.
-                    PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "pending" "post-write" 2>/dev/null || true
+                    if ! PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "pending" "post-write" 2>/dev/null; then
+                        log_info "post-write" "WARN: proof_state_set failed (status=pending, source=post-write)" 2>/dev/null || true
+                        append_audit "$PROJECT_ROOT" "proof_write_failed" "status=pending source=post-write hook=post-write" 2>/dev/null || true
+                    fi
                 fi
             fi
         fi

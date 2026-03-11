@@ -255,8 +255,18 @@ if [[ "$PROOF_STATUS" == "pending" || "$PROOF_STATUS" == "needs-verification" ]]
         _AV_WF_CT=$(workflow_id 2>/dev/null || echo "main")
         marker_create "autoverify" "$_AV_SESSION_CT" "$_AV_WF_CT" "$$" "" "active" 2>/dev/null || true
         # Write proof state to SQLite (sole authority since W5-2)
-        PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "verified" "check-tester-autoverify" 2>/dev/null || true
-        AUTO_VERIFIED=true
+        # @decision DEC-EPOCH-RESET-003
+        # @title AUTO_VERIFIED conditional on proof_state_set success (Bug C fix)
+        # @status accepted
+        # @rationale If proof_state_set("verified") fails (lattice violation, write error),
+        #   AUTO_VERIFIED must NOT be set. Proceeding with AUTO_VERIFIED=true after a failed
+        #   write causes Guardian to commit without a valid proof state in SQLite (#228).
+        if proof_state_set "verified" "check-tester-autoverify" 2>/dev/null; then
+            AUTO_VERIFIED=true
+        else
+            log_info "check-tester" "WARN: proof_state_set(verified) failed — auto-verify aborted" 2>/dev/null || true
+            append_audit "$PROJECT_ROOT" "autoverify_write_failed" "proof_state_set returned non-zero" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -358,7 +368,10 @@ fi
 #   because tester wrote verified to legacy path while gate read from new path.
 if [[ "$PROOF_STATUS" == "missing" && -n "$RESPONSE_TEXT" ]]; then
     # Write proof state to SQLite (sole authority since W5-2)
-    PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "pending" "check-tester-safetynet" 2>/dev/null || true
+    if ! PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "pending" "check-tester-safetynet" 2>/dev/null; then
+        log_info "check-tester" "WARN: proof_state_set failed (status=pending, source=check-tester-safetynet)" 2>/dev/null || true
+        append_audit "$PROJECT_ROOT" "proof_write_failed" "status=pending source=check-tester-safetynet hook=check-tester" 2>/dev/null || true
+    fi
     PROOF_STATUS="pending"
 fi
 

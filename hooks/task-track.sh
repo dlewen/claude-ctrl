@@ -596,16 +596,38 @@ if [[ "$AGENT_TYPE" == "implementer" ]]; then
     # require_state is safe to call multiple times (idempotent guard in state-lib.sh).
     require_state 2>/dev/null || true
 
+    # @decision DEC-EPOCH-RESET-002
+    # @title Epoch reset in task-track.sh before proof_state_set("needs-verification")
+    # @status accepted
+    # @rationale Gate C.2 dispatches the implementer by writing needs-verification.
+    #   If a prior cycle ended in "committed" state, needs-verification (ordinal 1)
+    #   regresses from committed (ordinal 4) — rejected by the lattice without an epoch
+    #   bump. proof_epoch_reset() enables the regression, preventing gate deadlock (#227).
     if [[ "$_IMPL_WORKFLOW" != "main" && -n "$_IMPL_WORKFLOW" ]]; then
         # Workflow-scoped proof activation — write to SQLite (sole authority since W5-2)
         # proof_state_set uses workflow_id() which auto-detects the worktree context.
-        proof_state_set "needs-verification" "task-track" 2>/dev/null || true
+        # Check if we need epoch reset (committed/verified → needs-verification is a regression)
+        _tc_current_status=$(proof_state_get 2>/dev/null | cut -d'|' -f1 || echo "")
+        if [[ "$_tc_current_status" == "committed" || "$_tc_current_status" == "verified" ]]; then
+            proof_epoch_reset 2>/dev/null || true
+        fi
+        if ! proof_state_set "needs-verification" "task-track" 2>/dev/null; then
+            log_info "task-track" "WARN: proof_state_set failed (status=needs-verification, source=task-track)" 2>/dev/null || true
+            append_audit "$PROJECT_ROOT" "proof_write_failed" "status=needs-verification source=task-track hook=task-track" 2>/dev/null || true
+        fi
     else
         # Project-wide proof activation — write to SQLite (sole authority since W5-2)
         # Only update if not already needs-verification
         _tc_current=$(proof_state_get 2>/dev/null | cut -d'|' -f1 || echo "")
         if [[ "$_tc_current" != "needs-verification" ]]; then
-            proof_state_set "needs-verification" "task-track" 2>/dev/null || true
+            # Check if we need epoch reset (committed/verified → needs-verification is a regression)
+            if [[ "$_tc_current" == "committed" || "$_tc_current" == "verified" ]]; then
+                proof_epoch_reset 2>/dev/null || true
+            fi
+            if ! proof_state_set "needs-verification" "task-track" 2>/dev/null; then
+                log_info "task-track" "WARN: proof_state_set failed (status=needs-verification, source=task-track)" 2>/dev/null || true
+                append_audit "$PROJECT_ROOT" "proof_write_failed" "status=needs-verification source=task-track hook=task-track" 2>/dev/null || true
+            fi
         fi
     fi
 fi

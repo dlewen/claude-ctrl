@@ -404,8 +404,12 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
         PROOF_VAL=$(proof_state_get 2>/dev/null | cut -d'|' -f1 || echo "")
         if [[ "$PROOF_VAL" == "verified" ]]; then
             # Transition to committed in SQLite
-            PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "committed" "check-guardian" 2>/dev/null || true
-            log_info "CHECK-GUARDIAN" "Proof state set to committed after successful commit"
+            if ! PROJECT_ROOT="$PROJECT_ROOT" proof_state_set "committed" "check-guardian" 2>/dev/null; then
+                log_info "check-guardian" "WARN: proof_state_set failed (status=committed, source=check-guardian)" 2>/dev/null || true
+                append_audit "$PROJECT_ROOT" "proof_write_failed" "status=committed source=check-guardian hook=check-guardian" 2>/dev/null || true
+            else
+                log_info "CHECK-GUARDIAN" "Proof state set to committed after successful commit"
+            fi
         fi
 
         # Check 7b: Post-merge worktree directory verification.
