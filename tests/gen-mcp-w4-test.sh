@@ -95,7 +95,7 @@ printf '%s\n' ''
 
 # E2 section — destructive SQL embedded via variable expansion into file
 printf '%s\n' 'echo "--- E2: SQL argument validation ---"'
-printf "$(cat << 'SQLSEC'
+printf '%s\n' "$(cat << 'SQLSEC'
 # SQL stored in variables at test runtime -- assembled from parts by gen script
 SQLSEC
 )"

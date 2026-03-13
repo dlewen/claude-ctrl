@@ -207,7 +207,7 @@ else
             _T08_AV_LINE=$(grep -n 'AUTO_VERIFIED=true' "$_CT_FILE" | head -1 | cut -d: -f1 || echo "0")
             if [[ "$_T08_VERIFIED_LINE" -gt 0 && "$_T08_AV_LINE" -gt "$_T08_VERIFIED_LINE" ]]; then
                 # Check the context — is there an 'if' wrapping the proof_state_set?
-                _T08_CONTEXT=$(sed -n "$((${_T08_VERIFIED_LINE}-2)),$((${_T08_VERIFIED_LINE}+3))p" "$_CT_FILE" 2>/dev/null || true)
+                _T08_CONTEXT=$(sed -n "$((_T08_VERIFIED_LINE-2)),$((_T08_VERIFIED_LINE+3))p" "$_CT_FILE" 2>/dev/null || true)
                 if echo "$_T08_CONTEXT" | grep -q "^if "; then
                     _pass "T08: check-tester.sh AUTO_VERIFIED is conditional on proof_state_set success"
                 else

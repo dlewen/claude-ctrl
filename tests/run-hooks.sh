@@ -898,7 +898,7 @@ while IFS= read -r hook; do
         case "$hook" in
             log.sh|source-lib.sh|state-registry.sh|state-lib.sh|\
             ci-lib.sh|core-lib.sh|doc-lib.sh|git-lib.sh|plan-lib.sh|session-lib.sh|trace-lib.sh|\
-            db-safety-lib.sh)
+            db-safety-lib.sh|db-guardian-lib.sh)
                 ;;
             *)
                 UNREGISTERED_HOOKS+="$hook "

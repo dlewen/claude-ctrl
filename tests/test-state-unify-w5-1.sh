@@ -225,7 +225,7 @@ for hook_file in "$HOOKS_DIR"/*.sh; do
 
     # Skip libraries — they don't call require_state themselves
     case "$hook_name" in
-        *-lib.sh|source-lib.sh|state-lib.sh)
+        *-lib.sh)
             continue ;;
     esac
 
