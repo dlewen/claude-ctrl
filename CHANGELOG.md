@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `fix/test-failures`: Resolve all 4 test failures + T05 pre-existing — db-guardian-lib.sh exempted from settings sync check (library, not hook), three shellcheck fixes in test files (SC2059, SC2004, SC2221/SC2222), T05 updated from removed dual-write contract to SQLite-only; test suite 372/372 pass
+
 ### Changed
 - `feature/kv-agent-findings`: Add SQLite audit trail for agent findings — 7 hook files emit state_emit("agent.finding") alongside flat-file .agent-findings writes, require_state bootstrap added to check-planner.sh and check-explore.sh; completes State Unification initiative (16/16 migratable dotfiles resolved) (DEC-STATE-KV-007)
 - `feature/kv-test-status`: Migrate `.test-status` to SQLite KV store — test-runner.sh dual-writes via state_update("test_status"), core-lib.sh read_test_status() reads KV primary with flat-file fallback, 6 consumer hooks updated (check-implementer, compact-preserve, session-end, session-init, stop, subagent-start); 10 new KV tests in test-session-kv.sh (DEC-STATE-KV-005)
