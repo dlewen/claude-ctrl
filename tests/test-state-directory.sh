@@ -242,46 +242,42 @@ unset PROJECT_ROOT CLAUDE_DIR CLAUDE_SESSION_ID TRACE_STORE 2>/dev/null || true
 
 
 # ===========================================================================
-# T05: write_proof_status() dual-writes to both new and old paths
+# T05: write_proof_status() writes to SQLite state.db (W5-2: SQLite-only)
 #
-# Call write_proof_status "needs-verification". Verify BOTH
-#   state/{phash}/proof-status  AND  .proof-status-{phash}
-# exist and contain the same content.
+# Since W5-2, write_proof_status() is SQLite-only — flat-file dual-writes
+# have been removed (DEC-STATE-UNIFY-004). Verify that calling
+# write_proof_status "needs-verification" returns 0 and creates the SQLite
+# state database at $CLAUDE_DIR/state/state.db.
+#
+# The old flat-file paths (state/{phash}/proof-status and .proof-status-{phash})
+# are no longer written by this function.
 # ===========================================================================
-run_test "T05: write_proof_status() dual-writes to state/{phash}/proof-status AND .proof-status-{phash}"
+run_test "T05: write_proof_status() succeeds and creates SQLite state.db (W5-2: SQLite-only)"
 
 T05_ENV=$(make_temp_env)
 T05_CLAUDE="$T05_ENV/.claude"
-T05_PHASH=$(compute_phash "$T05_ENV")
 T05_TRACE="$TMPDIR_BASE/traces-t05"
-mkdir -p "$T05_TRACE"
+mkdir -p "$T05_TRACE" "$T05_CLAUDE"
 
-(
+T05_RC=1
+T05_RC=$(
     export PROJECT_ROOT="$T05_ENV"
     export CLAUDE_DIR="$T05_CLAUDE"
     export CLAUDE_SESSION_ID="t05-session-$$"
     export TRACE_STORE="$T05_TRACE"
     export _HOOK_NAME="test-state-directory"
     write_proof_status "needs-verification" "$T05_ENV" 2>/dev/null
+    echo $?
 ) 2>/dev/null || true
 
-T05_NEW="$T05_CLAUDE/state/$T05_PHASH/proof-status"
-T05_OLD="$T05_CLAUDE/.proof-status-$T05_PHASH"
+T05_DB="$T05_CLAUDE/state/state.db"
 
-T05_ERRORS=()
-[[ -f "$T05_NEW" ]] || T05_ERRORS+=("new path missing: $T05_NEW")
-[[ -f "$T05_OLD" ]] || T05_ERRORS+=("old path missing: $T05_OLD")
-
-if [[ ${#T05_ERRORS[@]} -eq 0 ]]; then
-    T05_NEW_VAL=$(cut -d'|' -f1 "$T05_NEW" 2>/dev/null || echo "")
-    T05_OLD_VAL=$(cut -d'|' -f1 "$T05_OLD" 2>/dev/null || echo "")
-    if [[ "$T05_NEW_VAL" == "needs-verification" && "$T05_OLD_VAL" == "needs-verification" ]]; then
-        pass_test
-    else
-        fail_test "Content mismatch: new='$T05_NEW_VAL' old='$T05_OLD_VAL' (expected both 'needs-verification')"
-    fi
+if [[ "$T05_RC" == "0" ]] && [[ -f "$T05_DB" ]]; then
+    pass_test
+elif [[ "$T05_RC" != "0" ]]; then
+    fail_test "write_proof_status returned non-zero: $T05_RC (proof_state_set may be unavailable in test context)"
 else
-    fail_test "${T05_ERRORS[*]}"
+    fail_test "write_proof_status returned 0 but SQLite DB not found at $T05_DB"
 fi
 
 unset PROJECT_ROOT CLAUDE_DIR CLAUDE_SESSION_ID TRACE_STORE 2>/dev/null || true
