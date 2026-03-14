@@ -9,8 +9,8 @@
 # @title Four-line status bar redesign (was 3-line in v2)
 # @status accepted
 # @rationale The original 3-line layout packed all 8 metrics onto one line. With the
-# 65-char right-panel reservation (DEC-STATUSLINE-TERMWIDTH-003), "Project Lifetime"
-# was dropped at any COLUMNS <= 125. The 4-line layout gives primary metrics their own
+# former 65-char right-panel reservation (DEC-STATUSLINE-TERMWIDTH-003, now 15 chars),
+# "Project Lifetime" was dropped at COLUMNS <= 125. The 4-line layout gives primary metrics their own
 # line (Line 2) and secondary metrics their own line (Line 3), dramatically reducing
 # segment dropping. See DEC-STATUSLINE-4LINE-001 for full design rationale.
 # Removed: time (HH:MM:SS), plan phase inline segment, test status, community
@@ -31,11 +31,11 @@
 #     - Moved ∑ lifetime tokens adjacent to session tokens (both are resource metrics)
 #     - Moved cache hit % from old Line 3 to Line 2 (it's a resource efficiency metric)
 #     - Removed per-session cost from Line 2 (moved to Line 3)
-#   Line 3 (session meta): initiative | todos: Np Ng | session Nh Nm | ~$N est. lifetime
+#   Line 3 (session meta): initiative | todos: Np Ng | session Nh Nm
 #     - Added initiative (from session_label cache field) as priority-1 dim segment
 #     - Todos moved from Line 1 to Line 3 (it's session/workflow state)
 #     - Relabeled duration as "session Nh Nm" for explicitness
-#     - Only lifetime cost shown, labelled "est. lifetime"; per-session cost removed
+#     - Lifetime cost removed from Line 3; now shown as dim parenthetical on Line 2 ∑ segment
 #   Line 4 (highlight, conditional): session_label or initiative banner (unchanged)
 #
 # @decision DEC-STATUSLINE-001
@@ -61,8 +61,8 @@
 #
 # Line layout (top to bottom):
 #   Line 1 (repo):    workspace │ N uncommitted +N/-N lines │ N worktrees │ agents
-#   Line 2 (model):   model [ctx bar] N% │ NK tks(+subs SK tks) │ ∑NK tks │ cache hit N%
-#   Line 3 (session): initiative │ todos: Np Ng │ session Nh Nm │ ~$N est. lifetime
+#   Line 2 (model):   model [ctx bar] N% │ NK tks(+subs SK tks) │ ∑NK tks (API equiv: ~$N) │ cache hit N%
+#   Line 3 (session): initiative │ todos: Np Ng │ session Nh Nm
 #   Line 4 (highlight, conditional): session_label or initiative banner ← bold cyan, bottom
 #
 # @decision DEC-STATUSLINE-DEPS-001
@@ -625,18 +625,20 @@ fi
 
 # Terminal width — must be resolved before the responsive layout sections below.
 # @decision DEC-STATUSLINE-TERMWIDTH-003
-# @title Reserve 65 chars for Claude Code right-panel, clamp floor to 60
+# @title Reserve 15 chars for Claude Code right-panel, clamp floor to 60
 # @status accepted
 # @rationale Claude Code renders right-aligned info on the same lines as the custom
 # statusline ("Context left until auto-compact: N% · /model ..."), consuming ~60-70
 # visible characters. Without reserving this space, the responsive drop system uses
 # full COLUMNS, produces segments that overflow into the right panel, and Claude Code's
 # UI clips them — causing the metrics line to collapse to just the context bar.
-# Subtracting 65 chars from COLUMNS gives the responsive system the true available
-# width. Floor of 60 prevents negative/tiny widths from dropping everything.
+# Originally subtracted 65 chars, which was too aggressive: on a 130-col terminal only
+# 65 chars were available and important segments (lifetime cost, todos) were dropped
+# unnecessarily. Reduced to 15-char buffer — enough to guard against any right-side UI
+# elements without hiding content. Floor of 60 prevents negative/tiny widths.
 # Supersedes DEC-STATUSLINE-TERMWIDTH-002.
 term_w="${COLUMNS:-0}"
-(( term_w > 65 )) && term_w=$(( term_w - 65 )) || term_w=60
+(( term_w > 15 )) && term_w=$(( term_w - 15 )) || term_w=60
 (( term_w < 60 )) && term_w=60
 (( term_w > 200 )) && term_w=200
 
@@ -821,8 +823,8 @@ _append_p1_seg() {
 #
 #   New layout (post-reorg):
 #     Line 1: workspace | N uncommitted +N/-N lines | N worktrees | agents
-#     Line 2: model [ctx bar] | NK tks(+subs SK tks) | ∑NK tks | cache hit N%
-#     Line 3: initiative | todos: Np Ng | session Nh Nm | ~$N est. lifetime
+#     Line 2: model [ctx bar] | NK tks(+subs SK tks) | ∑NK tks (API equiv: ~$N) | cache hit N%
+#     Line 3: initiative | todos: Np Ng | session Nh Nm
 #     Line 4: session_label or initiative banner (bold cyan, unchanged)
 #
 #   Always emit 4 newlines for stable height (DEC-STATUSLINE-005 reasoning extended to 4 lines).
@@ -834,12 +836,12 @@ _append_p1_seg() {
 #   3 = ∑NK tks                               (lifetime tokens, adjacent to session)
 #   4 = cache hit N%                          (drops first on this line)
 #
-# LINE 3 (session meta): initiative + todos + duration + lifetime cost
+# LINE 3 (session meta): initiative + todos + duration (3 segments)
 # Priority table:
 #   1 = initiative name                       (from session_label cache field, dim)
 #   2 = todos: Np Ng                          (pending work)
 #   3 = session Nh Nm                         (session duration, relabeled)
-#   4 = ~$N est. lifetime                     (drops first on this line)
+# NOTE: lifetime cost removed from Line 3 — now a dim parenthetical on Line 2 ∑ segment
 # ---------------------------------------------------------------------------
 
 # Token count segment with subagent breakdown and project lifetime
@@ -889,30 +891,29 @@ else
   tokens_display=$(printf '\033[%sm%s tks\033[0m' "$tokens_color" "$tokens_str")
 fi
 
-# Compute lifetime token grand total segment
+# Compute lifetime token grand total segment.
 # Format: "∑<N> tks" — compact lifetime sum; ∑ prefix indicates cumulative project total.
 # ∑ is U+2211 (mathematical summation), distinct from Σ (U+03A3 Greek capital letter).
+# @decision DEC-LIFETIME-COST-002
+# @title Move lifetime cost to Line 2 as a dim parenthetical on the ∑ segment
+# @status accepted
+# @rationale Lifetime cost was previously shown as "~$N est. lifetime" on Line 3.
+# This was the first segment to drop when space was tight. Moving it to Line 2 as a dim
+# parenthetical "∑NK tks (API equiv: ~$N)" keeps it adjacent to the token metric it
+# contextualizes, and removes a whole segment from Line 3 (simplifying its drop logic
+# from 4 segments to 3). Only shown when lifetime_cost > 0 to avoid visual noise.
 _token_grand_total=$(( cache_lifetime_tokens_int + total_tokens_int + cache_subagent_tokens_int ))
+_lifetime_int="${cache_lifetime_cost%.*}"
+_lifetime_int="${_lifetime_int:-0}"
 grand_total_display=""
 if (( _token_grand_total > total_tokens_int + cache_subagent_tokens_int && _token_grand_total > 0 )); then
   grand_total_str=$(format_tokens "$_token_grand_total")
-  grand_total_display=$(printf '\033[2m∑%s tks\033[0m' "$grand_total_str")
-fi
-
-# Build lifetime cost display for Line 3.
-# @decision DEC-LIFETIME-COST-002
-# @title Display only lifetime cost (est. lifetime) on Line 3 — remove per-session cost
-# @status accepted
-# @rationale The new layout puts cost on Line 3 (session meta) rather than Line 2.
-# Only the lifetime cost is shown (session + accumulated), labelled "est. lifetime" for clarity.
-# Per-session cost alone is not shown because the lifetime total is more informative.
-# Format: "~$N.NN est. lifetime" — dim rendering to avoid visual noise.
-_lifetime_int="${cache_lifetime_cost%.*}"
-_lifetime_int="${_lifetime_int:-0}"
-lifetime_cost_display=""
-if (( _lifetime_int > 0 )) 2>/dev/null; then
-  _grand_cost=$(awk "BEGIN {printf \"%.2f\", $cache_lifetime_cost + $cost_usd}")
-  lifetime_cost_display=$(printf '\033[2m~$%s est. lifetime\033[0m' "$_grand_cost")
+  if (( _lifetime_int > 0 )) 2>/dev/null; then
+    _grand_cost=$(awk "BEGIN {printf \"%.2f\", $cache_lifetime_cost + $cost_usd}")
+    grand_total_display=$(printf '\033[2m∑%s tks (API equiv: ~$%s)\033[0m' "$grand_total_str" "$_grand_cost")
+  else
+    grand_total_display=$(printf '\033[2m∑%s tks\033[0m' "$grand_total_str")
+  fi
 fi
 
 # Cache efficiency display — "cache hit N%" label (was "cache N%")
@@ -989,12 +990,12 @@ _append_l2_seg() {
 [[ $_l2d3 -eq 0 ]] && _append_l2_seg "$_l2_3"
 
 # ---------------------------------------------------------------------------
-# Build LINE 3 segments: session meta (initiative + todos + duration + cost)
+# Build LINE 3 segments: session meta (initiative + todos + duration)
+# 3 segments only — lifetime cost moved to Line 2 as dim parenthetical on ∑ segment.
 # Priority table (lower = higher priority):
 #   1 = initiative (from cache_session_label field, dim)  (always kept — last to drop)
 #   2 = todos: Np Ng                                       (split project/global)
 #   3 = session Nh Nm                                      (relabeled from "duration")
-#   4 = ~$N est. lifetime                                  (drops first)
 # ---------------------------------------------------------------------------
 
 # L3.0: initiative (priority 1 — from cache_session_label, dim rendering)
@@ -1038,31 +1039,29 @@ fi
 _l3_2="$duration_display"
 ansi_visible_width "$_l3_2"; _l3w2=$_AVW
 
-# L3.3: ~$N est. lifetime (priority 4, drops first, conditional)
-_l3_3="$lifetime_cost_display"
-ansi_visible_width "$_l3_3"; _l3w3=$_AVW
+# NOTE: lifetime cost was removed from Line 3 (was L3.3, priority 4).
+# It is now a dim parenthetical on the ∑ segment of Line 2.
+# Line 3 now has only 3 segments: initiative (1), todos (2), session duration (3).
 
-# Responsive drop loop for Line 3
-_l3d0=0; _l3d1=0; _l3d2=0; _l3d3=0
+# Responsive drop loop for Line 3 (3 segments: initiative, todos, duration)
+_l3d0=0; _l3d1=0; _l3d2=0
 
 _compute_l3_width() {
   local total=0 seg_count=0
   [[ $_l3d0 -eq 0 && -n "$_l3_0" ]] && total=$(( total + _l3w0 )) && (( seg_count++ )) || true
   [[ $_l3d1 -eq 0 && -n "$_l3_1" ]] && total=$(( total + _l3w1 )) && (( seg_count++ )) || true
   [[ $_l3d2 -eq 0 && -n "$_l3_2" ]] && total=$(( total + _l3w2 )) && (( seg_count++ )) || true
-  [[ $_l3d3 -eq 0 && -n "$_l3_3" ]] && total=$(( total + _l3w3 )) && (( seg_count++ )) || true
   (( seg_count > 1 )) && total=$(( total + (seg_count - 1) * 3 )) || true
   _L3_TOTAL=$total
 }
 
 _L3_TOTAL=0
 _compute_l3_width
-# Drop from priority 4 down; initiative (priority 1) is last resort
-if (( _L3_TOTAL > term_w && _l3w3 > 0 )); then _l3d3=1; _compute_l3_width; fi
+# Drop from priority 3 down; initiative (priority 1) is last resort
 if (( _L3_TOTAL > term_w && _l3w2 > 0 )); then _l3d2=1; _compute_l3_width; fi
 if (( _L3_TOTAL > term_w && _l3w1 > 0 )); then _l3d1=1; _compute_l3_width; fi
 
-# Assemble Line 3: initiative │ todos │ session │ ~$N est. lifetime
+# Assemble Line 3: initiative │ todos │ session
 line3=""
 _l3_first=1
 _append_l3_seg() {
@@ -1078,13 +1077,12 @@ _append_l3_seg() {
 [[ $_l3d0 -eq 0 ]] && _append_l3_seg "$_l3_0"
 [[ $_l3d1 -eq 0 ]] && _append_l3_seg "$_l3_1"
 [[ $_l3d2 -eq 0 ]] && _append_l3_seg "$_l3_2"
-[[ $_l3d3 -eq 0 ]] && _append_l3_seg "$_l3_3"
 
 # ---------------------------------------------------------------------------
 # Output: 4-line layout — each line independently truncated to terminal width.
 #   Line 1 (top):     repo      — workspace, N uncommitted +N/-N lines, N worktrees, agents
-#   Line 2:           model     — model [ctx bar], tokens, ∑lifetime, cache hit
-#   Line 3:           session   — initiative (dim), todos, session duration, est. lifetime cost
+#   Line 2:           model     — model [ctx bar], tokens, ∑lifetime (API equiv: ~$N), cache hit
+#   Line 3:           session   — initiative (dim), todos, session duration
 #   Line 4 (bottom):  highlight — session_label or initiative banner (conditional, bold cyan)
 #
 # @decision DEC-STATUSLINE-004
@@ -1106,7 +1104,7 @@ printf '\n'
 truncate_ansi "$line2" "$term_w"
 printf '\n'
 
-# Line 3: session meta (initiative + todos + session duration + est. lifetime cost)
+# Line 3: session meta (initiative + todos + session duration)
 truncate_ansi "$line3" "$term_w"
 
 # Line 4: highlight bar (session_label or initiative — always allocated to prevent resize flicker)

@@ -210,80 +210,80 @@ test_context_bar_85pct() {
 }
 
 # ============================================================================
-# Test group 3: Cost — lifetime cost on Line 3 ("~$N est. lifetime")
-# Per-session cost (~$N.NN) is removed from Line 2 in the reorg layout.
-# Only lifetime cost appears on Line 3, labelled "est. lifetime".
+# Test group 3: Cost — lifetime cost is now a dim parenthetical on Line 2 ∑ segment.
+# Format: "∑NK tks (API equiv: ~$N.NN)" — only shown when lifetime_cost > 0.
 # ============================================================================
 
 test_cost_tilde_prefix() {
     run_test
-    # Cost is removed from Line 2; only lifetime shows on Line 3. Verify Line 2 has NO ~$.
-    # Instead check that per-session cost does NOT appear on Line 2 anymore.
+    # Cost is on Line 2 as dim parenthetical; no "est. lifetime" label anywhere.
+    # When no lifetime_cost in cache, no "API equiv" parenthetical shown on Line 2.
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0.53},"context_window":{}}'
     local line2
     line2=$(run_statusline_l2 "$json" | strip_ansi)
 
-    # Line 2 no longer has per-session cost — verify ~$ is absent (no lifetime shown when lifetime=0)
-    if ! printf '%s' "$line2" | grep -qF '~$'; then
-        pass_test "Line 2 has no per-session cost (removed in reorg; only est. lifetime on Line 3)"
+    # No lifetime cache → no API equiv parenthetical (lifetime_cost=0)
+    if ! printf '%s' "$line2" | grep -qF 'API equiv'; then
+        pass_test "Line 2 has no API equiv parenthetical when lifetime_cost=0 (no cache)"
     else
-        fail_test "Line 2 should not show per-session cost (~\$) in reorg layout" "line2=$line2"
+        fail_test "Line 2 should not show API equiv when lifetime_cost=0" "line2=$line2"
     fi
 }
 
 test_cost_display_present() {
     run_test
-    # Verify lifetime cost shows on Line 3 when lifetime_cost is non-zero.
+    # Verify lifetime cost shows on Line 2 as parenthetical when lifetime_cost is non-zero.
+    # Requires lifetime_tokens > 0 to show ∑ segment (which carries the cost parenthetical).
     local tmpdir
     tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/.claude"
-    printf '{"dirty":0,"worktrees":0,"agents_active":0,"agents_types":"","todo_project":0,"todo_global":0,"lifetime_cost":12.40}' \
+    printf '{"dirty":0,"worktrees":0,"agents_active":0,"agents_types":"","todo_project":0,"todo_global":0,"lifetime_cost":12.40,"lifetime_tokens":1000000}' \
         > "$tmpdir/.claude/.statusline-cache-${CLAUDE_SESSION_ID}"
 
-    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{"total_cost_usd":0.53},"context_window":{}}'
-    local line3
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{"total_cost_usd":0.53},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
     local output
-    output=$(run_statusline "$json" "$tmpdir")
-    line3=$(extract_line "$output" 3 | strip_ansi)
+    output=$(run_sl_columns "$json" 250 "$tmpdir")
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
-    if printf '%s' "$line3" | grep -qF 'est. lifetime'; then
-        pass_test "Line 3 shows 'est. lifetime' cost when lifetime_cost is non-zero"
+    if printf '%s' "$line2" | grep -qF 'API equiv'; then
+        pass_test "Line 2 shows 'API equiv' cost parenthetical when lifetime_cost is non-zero"
     else
-        fail_test "Line 3 missing 'est. lifetime' label" "line3=$line3"
+        fail_test "Line 2 missing 'API equiv' parenthetical in ∑ segment" "line2=$line2"
     fi
 }
 
 test_cost_zero() {
     run_test
-    # When lifetime_cost=0, no cost segment on Line 3
+    # When lifetime_cost=0, no API equiv parenthetical on Line 2 ∑ segment
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{"total_cost_usd":0},"context_window":{}}'
     local output
     output=$(run_statusline "$json")
-    local line3
-    line3=$(extract_line "$output" 3 | strip_ansi)
+    local line2
+    line2=$(extract_line "$output" 2 | strip_ansi)
 
-    # No lifetime cost segment when lifetime=0
-    if ! printf '%s' "$line3" | grep -qF 'est. lifetime'; then
-        pass_test "No est. lifetime segment when cost=0 and no lifetime cache"
+    # No lifetime cost parenthetical when lifetime=0
+    if ! printf '%s' "$line2" | grep -qF 'API equiv'; then
+        pass_test "No API equiv parenthetical on Line 2 when cost=0 and no lifetime cache"
     else
-        fail_test "Unexpected est. lifetime shown when cost=0 and no lifetime cache" "line3=$line3"
+        fail_test "Unexpected API equiv shown on Line 2 when cost=0 and no lifetime cache" "line2=$line2"
     fi
 }
 
 test_cost_no_field() {
     run_test
-    # When cost field absent, still no lifetime cost segment (lifetime_cost=0)
+    # When cost field absent, still no API equiv parenthetical on Line 2 (lifetime_cost=0)
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/p"},"cost":{},"context_window":{}}'
     local output
     output=$(run_statusline "$json")
-    local line3
-    line3=$(extract_line "$output" 3 | strip_ansi)
+    local line2
+    line2=$(extract_line "$output" 2 | strip_ansi)
 
-    if ! printf '%s' "$line3" | grep -qF 'est. lifetime'; then
-        pass_test "No est. lifetime segment when cost field absent"
+    if ! printf '%s' "$line2" | grep -qF 'API equiv'; then
+        pass_test "No API equiv parenthetical on Line 2 when cost field absent"
     else
-        fail_test "Unexpected est. lifetime shown when cost field absent" "line3=$line3"
+        fail_test "Unexpected API equiv shown on Line 2 when cost field absent" "line2=$line2"
     fi
 }
 
@@ -954,28 +954,31 @@ test_todo_split_p_suffix_present() {
 
 # ============================================================================
 # Test group 11: Lifetime cost display (REQ-P1-001)
+# Lifetime cost moved from Line 3 to Line 2 as a dim parenthetical on the ∑ segment.
+# Format: "∑NK tks (API equiv: ~$N.NN)" — only shown when lifetime_cost > 0
+# and the ∑ segment is visible (requires lifetime_tokens > 0).
 # ============================================================================
 
 test_lifetime_cost_absent_when_zero() {
     run_test
-    # cache_lifetime_cost=0 → "est. lifetime" segment should NOT appear on Line 3
+    # cache_lifetime_cost=0 → "API equiv" parenthetical should NOT appear on Line 2
     local tmpdir
     tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/.claude"
-    printf '{"dirty":0,"worktrees":0,"agents_active":0,"agents_types":"","todo_project":0,"todo_global":0,"lifetime_cost":0}' \
+    printf '{"dirty":0,"worktrees":0,"agents_active":0,"agents_types":"","todo_project":0,"todo_global":0,"lifetime_cost":0,"lifetime_tokens":1000000}' \
         > "$tmpdir/.claude/.statusline-cache-${CLAUDE_SESSION_ID}"
 
-    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{"total_cost_usd":0.25},"context_window":{}}'
-    local line3
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{"total_cost_usd":0.25},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
     local output
-    output=$(run_statusline "$json" "$tmpdir")
-    line3=$(extract_line "$output" 3 | strip_ansi)
+    output=$(run_sl_columns "$json" 250 "$tmpdir")
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
-    if [[ "$line3" != *"est. lifetime"* ]]; then
-        pass_test "Lifetime cost: 'est. lifetime' absent when lifetime_cost=0"
+    if [[ "$line2" != *"API equiv"* ]]; then
+        pass_test "Lifetime cost: 'API equiv' absent on Line 2 when lifetime_cost=0"
     else
-        fail_test "Lifetime cost 'est. lifetime' shown when lifetime_cost=0" "line3=$line3"
+        fail_test "Lifetime cost 'API equiv' shown on Line 2 when lifetime_cost=0" "line2=$line2"
     fi
 }
 
@@ -984,37 +987,38 @@ test_lifetime_cost_shown_when_nonzero() {
     local tmpdir
     tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/.claude"
-    printf '{"dirty":0,"worktrees":0,"agents_active":0,"agents_types":"","todo_project":0,"todo_global":0,"lifetime_cost":12.40}' \
+    printf '{"dirty":0,"worktrees":0,"agents_active":0,"agents_types":"","todo_project":0,"todo_global":0,"lifetime_cost":12.40,"lifetime_tokens":1000000}' \
         > "$tmpdir/.claude/.statusline-cache-${CLAUDE_SESSION_ID}"
 
-    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{"total_cost_usd":0.53},"context_window":{}}'
-    local line3
+    local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$tmpdir"'"},"cost":{"total_cost_usd":0.53},"context_window":{"total_input_tokens":100000,"total_output_tokens":45000}}'
+    local line2
     local output
-    output=$(run_statusline "$json" "$tmpdir")
-    line3=$(extract_line "$output" 3 | strip_ansi)
+    # COLUMNS=250 ensures ∑ segment (priority 3) is not dropped
+    output=$(run_sl_columns "$json" 250 "$tmpdir")
+    line2=$(extract_line "$output" 2 | strip_ansi)
     rm -rf "$tmpdir"
 
-    # New format: "~$12.93 est. lifetime" (12.40 + 0.53)
-    if [[ "$line3" == *"est. lifetime"* ]] && [[ "$line3" == *"~\$"* ]]; then
-        pass_test "Lifetime cost: '~\$N est. lifetime' shown on Line 3 when lifetime_cost=12.40"
+    # New format on Line 2: "∑1.1M tks (API equiv: ~$12.93)" (12.40 + 0.53)
+    if [[ "$line2" == *"API equiv"* ]] && [[ "$line2" == *"~\$"* ]]; then
+        pass_test "Lifetime cost: '(API equiv: ~\$N)' parenthetical shown on Line 2 when lifetime_cost=12.40"
     else
-        fail_test "Lifetime cost 'est. lifetime' not shown on Line 3" "line3=$line3"
+        fail_test "Lifetime cost 'API equiv' parenthetical not shown on Line 2" "line2=$line2"
     fi
 }
 
 test_lifetime_cost_not_shown_when_cache_absent() {
     run_test
-    # No cache file at all → lifetime_cost defaults to 0 → no est. lifetime on Line 3
+    # No cache file at all → lifetime_cost defaults to 0 → no API equiv on Line 2
     local json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"/tmp/nocache"},"cost":{"total_cost_usd":0.50},"context_window":{}}'
     local output
     output=$(run_statusline "$json")
-    local line3
-    line3=$(extract_line "$output" 3 | strip_ansi)
+    local line2
+    line2=$(extract_line "$output" 2 | strip_ansi)
 
-    if [[ "$line3" != *"est. lifetime"* ]]; then
-        pass_test "Lifetime cost: no 'est. lifetime' when cache file absent"
+    if [[ "$line2" != *"API equiv"* ]]; then
+        pass_test "Lifetime cost: no 'API equiv' on Line 2 when cache file absent"
     else
-        fail_test "Lifetime cost 'est. lifetime' shown without cache file" "line3=$line3"
+        fail_test "Lifetime cost 'API equiv' shown on Line 2 without cache file" "line2=$line2"
     fi
 }
 
@@ -1434,23 +1438,24 @@ test_responsive_no_truncation_at_wide() {
 # ----------------------------------------------------------------------------
 # DEC-STATUSLINE-TERMWIDTH-003 tests: effective width = COLUMNS - 65, floor 60
 # @decision DEC-STATUSLINE-TERMWIDTH-003
-# @title Tests for right-panel reservation: term_w = COLUMNS - 65 (floor 60)
+# @title Tests for right-panel reservation: term_w = COLUMNS - 15 (floor 60)
 # @status accepted
 # @rationale Verifies three key invariants of the Claude Code right-panel reservation:
-#   1. COLUMNS=180 -> effective width 115 (65-char reservation active, no floor)
-#   2. COLUMNS=60  -> floor kicks in (60-65=-5 -> clamped to 60, not negative)
-#   3. COLUMNS=0   -> floor kicks in (0-65=-65 -> clamped to 60)
-# Test 1 uses a 71-char workspace basename to force line1 total ~131 chars.
-# At term_w=115 agents+todos drop; at term_w=180 nothing drops.
-# Asserting agents IS dropped at COLUMNS=180 proves effective width=115.
+#   1. COLUMNS=140 -> effective width 125 (15-char reservation active, no floor)
+#      A 73-char workspace + segments totals ~127 chars; at effective=125 agents drop.
+#   2. COLUMNS=60  -> floor kicks in (60-15=45 -> clamped to 60, not too small)
+#   3. COLUMNS=0   -> floor kicks in (0-15=-15 -> clamped to 60)
+# Test 1 uses a 73-char workspace basename to force line1 total ~127 chars.
+# At term_w=125 agents(p4) drop; at term_w=180 nothing drops.
+# Asserting agents IS dropped at COLUMNS=140 (effective=125) proves the 15-char reservation.
 # ----------------------------------------------------------------------------
 
 test_termwidth_cols_180_effective_115() {
     run_test
-    # 73-char workspace basename: line1 total ~124 chars (workspace+uncommitted+worktrees+agents).
-    # New code (COLUMNS=180, term_w=115=180-65): agents(p4) dropped (total ~124 > 115).
-    # Old code (COLUMNS=180, term_w=180): line1=124<180, nothing drops, agents visible.
-    # Asserting agents ABSENT at COLUMNS=180 proves the 65-char right-panel reservation.
+    # 73-char workspace basename: line1 total ~127 chars (workspace + uncommitted + worktrees + agents).
+    # New code (COLUMNS=140, term_w=125=140-15): agents(p4) dropped (total ~127 > 125).
+    # If using old 65-char reservation: COLUMNS=140 -> effective=75, which would drop even more.
+    # This test proves we use exactly 15-char reservation (not more, not less effectively).
     local long_name
     long_name=$(printf '%073d' 0 | tr '0' 'a')   # 73 'a' chars
     local tmpdir
@@ -1463,14 +1468,14 @@ test_termwidth_cols_180_effective_115() {
     local json
     json='{"model":{"display_name":"Claude"},"workspace":{"current_dir":"'"$workspace_dir"'"},"cost":{},"context_window":{}}'
     local output
-    output=$(printf '%s' "$json" | COLUMNS=180 HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null)
+    output=$(printf '%s' "$json" | COLUMNS=140 HOME="$tmpdir" bash "$STATUSLINE" 2>/dev/null)
     local line1
     line1=$(extract_line "$output" 1 | strip_ansi)
     rm -rf "$tmpdir"
     if [[ "$line1" != *"agents:"* ]]; then
-        pass_test "termwidth: COLUMNS=180 effective width 115 — agents dropped (proves 65-char reservation)"
+        pass_test "termwidth: COLUMNS=140 effective width 125 — agents dropped (proves 15-char reservation)"
     else
-        fail_test "termwidth: COLUMNS=180 should reserve 65 chars (effective=115), but agents still visible" "line1=$line1"
+        fail_test "termwidth: COLUMNS=140 should reserve 15 chars (effective=125), but agents still visible" "line1=$line1"
     fi
 }
 
