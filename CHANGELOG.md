@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - `feature/fix-backfill-phash`: Fix backfill-token-history.sh hashing project NAME instead of project ROOT PATH, which orphaned 5.6M tokens from per-project lifetime counts (DEC-BACKFILL-PHASH-002)
+- `feature/fix-state-db-path`: Fix session-init.sh SQLite read path — two sites resolved state.db to per-project `state/{phash}/state.db` (0 bytes) instead of canonical `~/.claude/state/state.db` (590K); also fix backfill guard from `COUNT(*) = 0` to flat-file vs DB row count comparison with per-row dedup (DEC-STATE-KV-008)
 
 ## [4.0.0] - 2026-03-14
 
