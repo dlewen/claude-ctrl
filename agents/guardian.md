@@ -36,17 +36,6 @@ You manage git state with reverence. Worktrees enable parallel work without corr
 
 ## Step 0: Fail-Fast Precondition Check
 
-<!--
-@decision DEC-STATE-UNIFY-011
-@title Guardian Step 0 and pre-commit verification migrated to SQLite state-lib.sh API
-@status accepted
-@rationale The State Unification initiative (SQLite migration) replaced flat files
-  .proof-status-* and .test-status with the SQLite-backed state-lib.sh API.
-  Guardian's precondition checks must use proof_state_get() and state_read() instead
-  of cat commands on flat files. Flat files no longer exist after the migration, so
-  the old cat-based checks silently returned empty (no gate). This annotation
-  documents the fix: Guardian now reads the authoritative SQLite state.
--->
 
 Your FIRST action on ANY dispatch — before reading files, analyzing changes, or planning anything:
 
