@@ -177,6 +177,7 @@ _scope_pattern() {
         dbsafe-w2b)        echo "db-safety-lib\.sh unit tests.*Wave 2b" ;;
         dbsafe-w4)         echo "MCP Governance Wave 4" ;;
         dbsafe-w5)         echo "DB Safety Wave 5" ;;
+        selfheal)          echo "write_proof_status.*self-heal" ;;
         *)                 echo "" ;;
     esac
 }
@@ -2763,6 +2764,44 @@ fi
 
 echo ""
 fi # end: bash32-compat
+
+# --- Test: write_proof_status self-heals when state-lib.sh is not pre-loaded ---
+# Regression guard for the bug where tester agents that source source-lib.sh
+# (which loads log.sh but NOT state-lib.sh) would get a silent exit 1 from
+# write_proof_status because proof_state_set was undefined.
+# Fix: write_proof_status now calls require_state lazily before the declare -f check.
+if should_run_section "write_proof_status self-heal"; then
+echo ""
+echo "--- write_proof_status: self-heal when state-lib.sh not pre-loaded ---"
+
+_WPS_HOOKS_DIR="${HOOKS_DIR:-$HOME/.claude/hooks}"
+_WPS_RESULT=$(bash -c "
+    source \"\$HOME/.claude/hooks/source-lib.sh\" 2>/dev/null
+    # Override write_proof_status with the version under test (may be a worktree copy)
+    source \"${_WPS_HOOKS_DIR}/log.sh\" 2>/dev/null
+    # Confirm proof_state_set is NOT yet loaded (baseline for the test)
+    if declare -f proof_state_set >/dev/null 2>&1; then
+        echo 'SKIP: proof_state_set already loaded before write_proof_status call'
+        exit 0
+    fi
+    # Call write_proof_status without pre-loading state-lib.sh
+    write_proof_status 'pending' 2>/dev/null
+    echo \"exit:\$?\"
+" 2>/dev/null)
+
+if echo "$_WPS_RESULT" | grep -q "SKIP:"; then
+    skip "write_proof_status self-heal" "proof_state_set already loaded by source-lib (environment variation)"
+elif echo "$_WPS_RESULT" | grep -q "exit:0"; then
+    pass "write_proof_status: exits 0 when state-lib.sh auto-loaded (self-heal works)"
+elif echo "$_WPS_RESULT" | grep -q "exit:1"; then
+    fail "write_proof_status: exits 1 without pre-loading state-lib.sh (self-heal broken)" \
+         "proof_state_set was not auto-loaded; check write_proof_status in log.sh"
+else
+    fail "write_proof_status self-heal: unexpected output" "$_WPS_RESULT"
+fi
+
+echo ""
+fi # end: write_proof_status self-heal
 
 # (Self-validation tests removed from inline delegation — they run as
 # standalone test files in CI step 2.)

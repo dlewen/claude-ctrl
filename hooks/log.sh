@@ -389,9 +389,31 @@ write_proof_status() {
 
     mkdir -p "$claude_dir" 2>/dev/null || return 1
 
+    # Auto-load state-lib.sh if proof_state_set is not yet available.
+    # Callers like the tester agent source source-lib.sh (which loads log.sh)
+    # but may not call require_state themselves. Without this, write_proof_status
+    # silently fails with exit 1 and no diagnostic output.
+    #
+    # @decision DEC-LOG-SELFHEAL-001
+    # @title write_proof_status auto-loads state-lib.sh when proof_state_set is missing
+    # @status accepted
+    # @rationale Agents (especially the tester) source source-lib.sh which loads
+    #   log.sh and core-lib.sh but NOT state-lib.sh. The prior code silently returned
+    #   exit 1 when proof_state_set was undefined, giving callers no indication of why
+    #   the write failed. The fix: lazy-load state-lib.sh here via require_state if it
+    #   has not already been loaded. require_state is idempotent, so callers that did
+    #   pre-load state-lib.sh see no change. Callers that did not pre-load get the
+    #   dependency satisfied transparently. If require_state itself is missing (extremely
+    #   unlikely — it ships with source-lib.sh), the original declare -f guard still
+    #   returns 1 with a log message, unchanged from prior behavior.
+    if ! declare -f proof_state_set >/dev/null 2>&1; then
+        if declare -f require_state >/dev/null 2>&1; then
+            require_state 2>/dev/null || true
+        fi
+    fi
+
     # --- PRIMARY: Write to SQLite via proof_state_set() ---
     # proof_state_set() enforces the monotonic lattice atomically via BEGIN IMMEDIATE.
-    # Requires state-lib.sh to be loaded (via require_state in the calling hook).
     # Returns 1 on lattice violation (same behavior as before: transition rejected).
     if declare -f proof_state_set >/dev/null 2>&1; then
         PROJECT_ROOT="$project_root" CLAUDE_DIR="$claude_dir" \
