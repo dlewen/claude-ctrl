@@ -87,7 +87,7 @@ get_plan_status() {
             "$root/MASTER_PLAN.md" 2>/dev/null || echo "")
 
         # Count initiative blocks in Active Initiatives section
-        PLAN_TOTAL_INITIATIVES=$(echo "$_active_section" | grep -cE '^\#\#\#\s+Initiative:' 2>/dev/null || echo "0")
+        PLAN_TOTAL_INITIATIVES=$(echo "$_active_section" | grep -cE '^\#\#\#\s+Initiative:' 2>/dev/null || true)
         PLAN_TOTAL_INITIATIVES=${PLAN_TOTAL_INITIATIVES:-0}
 
         # Count active initiatives: ### Initiative: blocks with **Status:** active
@@ -459,7 +459,8 @@ compress_initiative() {
     local _started _goal _dec_ids _phase_count
     _started=$(echo "$_init_block" | grep -iE '^\*\*Started:\*\*' | head -1 | sed 's/\*\*Started:\*\*[[:space:]]*//' | tr -d '\n')
     _goal=$(echo "$_init_block" | grep -iE '^\*\*Goal:\*\*' | head -1 | sed 's/\*\*Goal:\*\*[[:space:]]*//' | tr -d '\n')
-    _phase_count=$(echo "$_init_block" | grep -cE '^#### Phase' 2>/dev/null || echo "0")
+    _phase_count=$(echo "$_init_block" | grep -cE '^#### Phase' 2>/dev/null || true)
+    _phase_count=${_phase_count:-0}
     _dec_ids=$(echo "$_init_block" | grep -oE 'DEC-[A-Z]+-[0-9]+' | sort -u | tr '\n' ',' | sed 's/,$//' || echo "—")
     [[ -z "$_dec_ids" ]] && _dec_ids="—"
     [[ -z "$_started" ]] && _started="unknown"

@@ -44,7 +44,7 @@ fi
 # Living-document format: extract ## Identity + ## Architecture sections (bounded, ~25 lines).
 # Legacy format: extract pre-`---` or pre-`## Original Intent` preamble.
 if [[ -f "$PROJECT_ROOT/MASTER_PLAN.md" ]]; then
-    HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$PROJECT_ROOT/MASTER_PLAN.md" 2>/dev/null || echo "0")
+    HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$PROJECT_ROOT/MASTER_PLAN.md" 2>/dev/null || true)
     if [[ "$HAS_INITIATIVES" -gt 0 ]]; then
         # Living-document format: bounded extraction of permanent sections
         IDENTITY_SECTION=$(awk '/^## Identity/{f=1; next} f && /^## /{exit} f{print}' \

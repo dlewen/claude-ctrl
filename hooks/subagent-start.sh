@@ -110,7 +110,7 @@ CONTEXT_PARTS+=("$CTX_LINE")
 # Living-document format: extract ## Architecture section (top-level).
 # Legacy format: extract ### Architecture subsection within preamble.
 if [[ -f "$PROJECT_ROOT/MASTER_PLAN.md" ]]; then
-    HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$PROJECT_ROOT/MASTER_PLAN.md" 2>/dev/null || echo "0")
+    HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$PROJECT_ROOT/MASTER_PLAN.md" 2>/dev/null || true)
     if [[ "$HAS_INITIATIVES" -gt 0 ]]; then
         # Living-document format: ## Architecture is a top-level section
         ARCH_SECTION=$(awk '/^## Architecture/{f=1; next} f && /^## /{exit} f{print}' \
