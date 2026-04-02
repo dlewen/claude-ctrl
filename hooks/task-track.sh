@@ -570,7 +570,7 @@ if [[ "$AGENT_TYPE" == "implementer" ]]; then
     if [[ -n "$RESOLVED_MAIN_WT" && ( "$RESOLVED_ROOT" == "$RESOLVED_MAIN_WT" || "$RESOLVED_PWD" == "$RESOLVED_MAIN_WT"* ) ]]; then
         # We're in the main worktree — implementer must use isolation
         WORKTREE_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
-            | grep -c '^worktree ' || echo "0")
+            | grep -c '^worktree ' || true)
         if [[ "$WORKTREE_COUNT" -le 1 ]]; then
             _write_gate_denied_trace "implementer" "gate-c1-no-worktree" "No linked worktree found (branch: ${CURRENT_BRANCH})" 2>/dev/null || true
             emit_deny "Cannot dispatch implementer from main worktree (branch: '$CURRENT_BRANCH'). Sacred Practice #2: create a worktree first. Use: git worktree add .worktrees/<name> -b feature/<name>"

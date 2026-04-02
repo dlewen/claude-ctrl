@@ -308,7 +308,7 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
             if [[ -f "$MERGE_HEAD_FILE" ]]; then
                 ORIG_HEAD=$(cat "$MERGE_HEAD_FILE" 2>/dev/null || echo "")
                 if [[ -n "$ORIG_HEAD" ]]; then
-                    CHANGELOG_IN_MERGE=$(git -C "$PROJECT_ROOT" diff --name-only "${ORIG_HEAD}" HEAD 2>/dev/null | grep -c '^CHANGELOG\.md$' || echo "0")
+                    CHANGELOG_IN_MERGE=$(git -C "$PROJECT_ROOT" diff --name-only "${ORIG_HEAD}" HEAD 2>/dev/null | grep -c '^CHANGELOG\.md$' || true)
                     if [[ "$CHANGELOG_IN_MERGE" -eq 0 ]]; then
                         ISSUES+=("Advisory: CHANGELOG.md not updated in this merge — consider adding a changelog entry for the merged feature")
                     fi
@@ -433,7 +433,7 @@ if [[ -n "$RESPONSE_TEXT" ]]; then
         #   checked), but sweep is called once after the loop using the standard
         #   WORKTREE_DIR (.worktrees/ parent). Empty sweep output is suppressed.
         GIT_WT_COUNT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
-            | grep -c '^worktree ' || echo "0")
+            | grep -c '^worktree ' || true)
         if [[ "$GIT_WT_COUNT" -gt 1 ]]; then
             MAIN_WT=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
                 | awk '/^worktree /{print $2; exit}') || MAIN_WT=""

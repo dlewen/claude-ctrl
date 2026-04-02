@@ -117,12 +117,12 @@ RESPONSE_TEXT=$(echo "$AGENT_RESPONSE" | jq -r '.last_assistant_message // .resp
 RESPONSE_LEN=${#RESPONSE_TEXT}
 echo "check-tester: RESPONSE_TEXT length=$RESPONSE_LEN" >&2
 if [[ "$RESPONSE_LEN" -gt 0 ]]; then
-    AV_SIGNAL=$(echo "$RESPONSE_TEXT" | grep -c 'AUTOVERIFY: CLEAN' 2>/dev/null || echo "0")
+    AV_SIGNAL=$(echo "$RESPONSE_TEXT" | grep -c 'AUTOVERIFY: CLEAN' 2>/dev/null || true)
     echo "check-tester: AUTOVERIFY signal count=$AV_SIGNAL" >&2
     if [[ "$AV_SIGNAL" -gt 0 ]]; then
-        CONF_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci '\*\*High\*\*' 2>/dev/null || echo "0")
-        PARTIAL_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci 'Partially verified' 2>/dev/null || echo "0")
-        NOT_TESTED_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci 'Not tested' 2>/dev/null || echo "0")
+        CONF_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci '\*\*High\*\*' 2>/dev/null || true)
+        PARTIAL_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci 'Partially verified' 2>/dev/null || true)
+        NOT_TESTED_CHECK=$(echo "$RESPONSE_TEXT" | grep -ci 'Not tested' 2>/dev/null || true)
         echo "check-tester: secondary validation: High=$CONF_CHECK Partial=$PARTIAL_CHECK NotTested=$NOT_TESTED_CHECK" >&2
     fi
 else
@@ -159,7 +159,7 @@ if [[ -z "$RESPONSE_TEXT" ]] || ! echo "$RESPONSE_TEXT" | grep -q 'AUTOVERIFY: C
 ${_SUMMARY_TEXT}"
                 RESPONSE_LEN=${#RESPONSE_TEXT}
                 echo "check-tester: RESPONSE_TEXT length after supplement=$RESPONSE_LEN" >&2
-                AV_SIGNAL_AFTER=$(echo "$RESPONSE_TEXT" | grep -c 'AUTOVERIFY: CLEAN' 2>/dev/null || echo "0")
+                AV_SIGNAL_AFTER=$(echo "$RESPONSE_TEXT" | grep -c 'AUTOVERIFY: CLEAN' 2>/dev/null || true)
                 echo "check-tester: AUTOVERIFY signal count after supplement=$AV_SIGNAL_AFTER" >&2
             fi
         else

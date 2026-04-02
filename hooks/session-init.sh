@@ -23,7 +23,8 @@ for _lib in source-lib.sh log.sh; do
         # Pattern A: avoid bash -n | head -3 SIGPIPE; capture all stderr and truncate in bash
         _SYNTAX_ERR=$(bash -n "$_HOOKS_DIR/$_lib" 2>&1 || true)
         _SYNTAX_ERR="${_SYNTAX_ERR:0:500}"  # truncate to ~3 lines worth inline
-        _HAS_MARKERS=$(grep -c '^<\{7\}\|^=\{7\}\|^>\{7\}' "$_HOOKS_DIR/$_lib" 2>/dev/null || echo 0)
+        _HAS_MARKERS=$(grep -c '^<\{7\}\|^=\{7\}\|^>\{7\}' "$_HOOKS_DIR/$_lib" 2>/dev/null || true)
+        _HAS_MARKERS=${_HAS_MARKERS:-0}
         _REMEDIATION="Run: bash -n ~/.claude/hooks/$_lib"
         [[ "$_HAS_MARKERS" -gt 0 ]] && _REMEDIATION="Merge conflict markers detected in $_lib. Remove <<<<<<< ======= >>>>>>> lines."
         cat <<SYNTAX_EOF
@@ -568,7 +569,7 @@ if [[ "$PLAN_EXISTS" == "true" ]]; then
     _PLAN_FILE="$PROJECT_ROOT/MASTER_PLAN.md"
 
     # Detect format: new (### Initiative:) vs old (## Phase N:)
-    _HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$_PLAN_FILE" 2>/dev/null || echo "0")
+    _HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$_PLAN_FILE" 2>/dev/null || true)
 
     if [[ "$_HAS_INITIATIVES" -gt 0 ]]; then
         # --- New living-document format: tiered injection ---

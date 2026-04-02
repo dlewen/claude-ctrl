@@ -171,8 +171,8 @@ if [[ ! -f "$PLAN" ]]; then
     ISSUES+=("MASTER_PLAN.md not found in project root")
 else
     # Detect format: living-document (### Initiative: headers) vs legacy (## Phase N)
-    INITIATIVE_COUNT=$(grep -cE '^\#\#\#\s+Initiative:' "$PLAN" 2>/dev/null || echo "0")
-    PHASE_COUNT=$(grep -cE '^\#\#\s+Phase\s+[0-9]|^\#{4,5}\s+Phase\s+[0-9]' "$PLAN" 2>/dev/null || echo "0")
+    INITIATIVE_COUNT=$(grep -cE '^\#\#\#\s+Initiative:' "$PLAN" 2>/dev/null || true)
+    PHASE_COUNT=$(grep -cE '^\#\#\s+Phase\s+[0-9]|^\#{4,5}\s+Phase\s+[0-9]' "$PLAN" 2>/dev/null || true)
 
     if [[ "$INITIATIVE_COUNT" -gt 0 ]]; then
         # --- Living-document format validation ---

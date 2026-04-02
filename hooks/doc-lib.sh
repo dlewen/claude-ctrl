@@ -157,7 +157,8 @@ get_doc_freshness() {
 
         # Count files in scope (after dedup)
         local scope_count
-        scope_count=$(echo "$scope_files" | sort -u | grep -c '.' 2>/dev/null || echo "0")
+        scope_count=$(echo "$scope_files" | sort -u | grep -c '.' 2>/dev/null || true)
+        scope_count=${scope_count:-0}
 
         # Skip if scope is too small
         if [[ "$scope_count" -lt "$min_scope" ]]; then

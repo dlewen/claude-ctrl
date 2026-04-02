@@ -233,8 +233,8 @@ if [[ "$FILE_PATH" =~ MASTER_PLAN\.md$ ]]; then
         ISSUES=()
         WARNINGS=()
 
-        HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$PLAN_FILE_PATH" 2>/dev/null || echo "0")
-        HAS_OLD_PHASES=$(grep -cE '^\#\#\s+Phase\s+[0-9]' "$PLAN_FILE_PATH" 2>/dev/null || echo "0")
+        HAS_INITIATIVES=$(grep -cE '^\#\#\#\s+Initiative:' "$PLAN_FILE_PATH" 2>/dev/null || true)
+        HAS_OLD_PHASES=$(grep -cE '^\#\#\s+Phase\s+[0-9]' "$PLAN_FILE_PATH" 2>/dev/null || true)
 
         if ! grep -qiE '^\#.*intent|^\#.*vision|^\#.*user.*request|^\#.*original' "$PLAN_FILE_PATH" 2>/dev/null; then
             ISSUES+=("Missing original intent/vision section. MASTER_PLAN.md must preserve the user's original request.")
@@ -283,7 +283,7 @@ if [[ "$FILE_PATH" =~ MASTER_PLAN\.md$ ]]; then
             fi
 
             DEC_LOG_SECTION=$(awk '/^## Decision Log/{f=1} f && /^---/{exit} f{print}' "$PLAN_FILE_PATH" 2>/dev/null || echo "")
-            DEC_LOG_ENTRIES=$(echo "$DEC_LOG_SECTION" | grep -cE '^\|\s+[0-9]{4}' 2>/dev/null || echo "0")
+            DEC_LOG_ENTRIES=$(echo "$DEC_LOG_SECTION" | grep -cE '^\|\s+[0-9]{4}' 2>/dev/null || true)
             if [[ "$DEC_LOG_ENTRIES" -eq 0 ]]; then
                 WARNINGS+=("Decision Log has no entries yet. Append decisions as work progresses.")
             fi
