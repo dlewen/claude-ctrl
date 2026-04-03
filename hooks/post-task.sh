@@ -193,6 +193,44 @@ if [[ "$IS_SUBAGENT" == "true" && "$SUBAGENT_TYPE" != "tester" && -n "$SUBAGENT_
             log_info "POST-TASK" "fallback: trace finalized for agent_type=${SUBAGENT_TYPE}"
             append_audit "$_fb_project_root" "post_task_fallback_finalize" \
                 "agent_type=${SUBAGENT_TYPE} trace=${_fb_trace_id}" 2>/dev/null || true
+
+            # @decision DEC-POST-TASK-GUARDIAN-001
+            # @title Phase B proof transition (verified→committed) migrated from check-guardian.sh
+            # @status accepted
+            # @rationale check-guardian.sh (SubagentStop:guardian) always outputs additionalContext,
+            #   creating a feedback loop when SubagentStop fires on each agent response. SubagentStop
+            #   is unreliable (DEC-PROOF-LIFE-001) and PostToolUse:Task is the authoritative path.
+            #   The proof transition is moved here where guardian commit detection already exists
+            #   (via guardian-start-sha comparison). check-guardian.sh retains side effects
+            #   (audit, findings, CI watcher) but outputs empty JSON to break the loop.
+            if [[ "$SUBAGENT_TYPE" == "guardian" ]]; then
+                _guard_phash=$(project_hash "$_fb_project_root" 2>/dev/null || echo "")
+                _guard_claude_dir="${CLAUDE_DIR:-$_fb_project_root/.claude}"
+                _guard_sha_file="${_guard_claude_dir}/state/${_guard_phash}/guardian-start-sha"
+                _guard_start_sha=""
+                _guard_current_sha=""
+                [[ -f "$_guard_sha_file" ]] && _guard_start_sha=$(cat "$_guard_sha_file" 2>/dev/null || echo "")
+                _guard_current_sha=$(git -C "$_fb_project_root" rev-parse HEAD 2>/dev/null || echo "")
+                if [[ -n "$_guard_start_sha" && -n "$_guard_current_sha" && "$_guard_start_sha" != "$_guard_current_sha" ]]; then
+                    # Commit detected — attempt Phase B proof transition: verified → committed
+                    _guard_proof_row=$(proof_state_get 2>/dev/null || echo "")
+                    _guard_proof_status=$(echo "$_guard_proof_row" | cut -d'|' -f1)
+                    if [[ "$_guard_proof_status" == "verified" ]]; then
+                        if proof_state_set "committed" "post-task-guardian" 2>/dev/null; then
+                            log_info "POST-TASK" "guardian Phase B: proof state verified→committed (commit detected)"
+                            append_audit "$_fb_project_root" "post_task_guardian_phase_b" \
+                                "proof_state=committed start_sha=${_guard_start_sha} current_sha=${_guard_current_sha}" 2>/dev/null || true
+                        else
+                            log_info "POST-TASK" "guardian Phase B: proof_state_set committed failed (lattice or state error)"
+                        fi
+                    else
+                        log_info "POST-TASK" "guardian Phase B: proof state is '${_guard_proof_status}' (not verified) — skipping committed transition"
+                    fi
+                else
+                    log_info "POST-TASK" "guardian Phase B: no commit detected (start=${_guard_start_sha:-empty} current=${_guard_current_sha:-empty}) — skipping"
+                fi
+            fi
+
             # Emit additionalContext for non-implementer agents (implementer gets its own
             # DISPATCH TESTER NOW directive below — do not exit here for implementers).
             if [[ "$SUBAGENT_TYPE" != "implementer" ]]; then

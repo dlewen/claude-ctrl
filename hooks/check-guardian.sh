@@ -529,12 +529,10 @@ if [[ ${#ISSUES[@]} -gt 0 ]]; then
     state_emit "agent.finding" "{\"agent\":\"guardian\",\"text\":\"${_GF_TEXT}\"}" 2>/dev/null || true
 fi
 
-# Output as additionalContext
-ESCAPED=$(echo -e "$CONTEXT" | jq -Rs .)
-cat <<EOF
-{
-  "additionalContext": $ESCAPED
-}
-EOF
+# Output empty JSON to prevent SubagentStop feedback loop.
+# Phase B proof transition migrated to post-task.sh (PostToolUse:Task)
+# which fires reliably. See DEC-POST-TASK-GUARDIAN-001.
+# Advisory findings are still persisted to .agent-findings and audit log above.
+echo '{}'
 
 exit 0
