@@ -347,6 +347,12 @@ if [[ "$AGENT_TYPE" == "guardian" ]]; then
         _TT_WF_ID=$(workflow_id 2>/dev/null || echo "main")
         marker_create "guardian" "$_SESSION" "$_TT_WF_ID" "$$" "" "pre-dispatch" 2>/dev/null || true
 
+        # Clear dedup marker so each new guardian dispatch delivers findings fresh.
+        # DEC-GUARDIAN-DEDUP-001: check-guardian.sh hashes CONTEXT to suppress repeat
+        # SubagentStop output. Removing the marker here ensures the first SubagentStop
+        # of this dispatch always delivers — never silenced by a stale prior-run hash.
+        rm -f "${CLAUDE_DIR}/state/${_PHASH}/.guardian-stop-hash" 2>/dev/null || true
+
         # Heartbeat: touch the marker every 60s so the 600s TTL window stays fresh
         # during long Guardian operations (multi-file commit, push, PR creation).
         # Background subshell exits automatically when the marker disappears

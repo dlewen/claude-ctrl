@@ -522,10 +522,36 @@ if [[ ${#ISSUES[@]} -gt 0 ]]; then
     state_emit "agent.finding" "{\"agent\":\"guardian\",\"text\":\"${_GF_TEXT}\"}" 2>/dev/null || true
 fi
 
-# Output empty JSON to prevent SubagentStop feedback loop.
-# Phase B proof transition migrated to post-task.sh (PostToolUse:Task)
-# which fires reliably. See DEC-POST-TASK-GUARDIAN-001.
-# Advisory findings are still persisted to .agent-findings and audit log above.
-echo '{}'
+# @decision DEC-GUARDIAN-DEDUP-001
+# @title Dedup SubagentStop output to prevent feedback loop
+# @status accepted
+# @rationale SubagentStop fires on every end_turn, not just once. If the hook
+#   outputs additionalContext, the agent responds, triggering another SubagentStop.
+#   Fix: hash the findings (CONTEXT), compare to last-delivered hash stored in a
+#   marker file. If unchanged, output empty JSON — the agent already saw these
+#   findings. If changed (new issues or issues resolved), deliver the new findings.
+#   All side effects (tracking, events, trace, audit, .agent-findings) run
+#   unconditionally — only the stdout output is deduped.
+#   Marker is scoped to project hash and cleaned up on next guardian dispatch
+#   (subagent-start.sh creates a fresh state for each dispatch).
+_DEDUP_PHASH=$(project_hash "$PROJECT_ROOT" 2>/dev/null || echo "")
+_DEDUP_MARKER="${CLAUDE_DIR}/state/${_DEDUP_PHASH}/.guardian-stop-hash"
+_DEDUP_HASH=$(printf '%s' "$CONTEXT" | ${_SHA256_CMD:-sha256sum} 2>/dev/null | cut -c1-16)
+_DEDUP_PREV=$(cat "$_DEDUP_MARKER" 2>/dev/null || echo "")
+
+if [[ "$_DEDUP_HASH" != "$_DEDUP_PREV" ]]; then
+    # New or changed findings — deliver to agent
+    mkdir -p "$(dirname "$_DEDUP_MARKER")" 2>/dev/null || true
+    echo "$_DEDUP_HASH" > "$_DEDUP_MARKER" 2>/dev/null || true
+    ESCAPED=$(echo -e "$CONTEXT" | jq -Rs .)
+    cat <<EOF
+{
+  "additionalContext": $ESCAPED
+}
+EOF
+else
+    # Same findings already delivered — go silent so agent can exit
+    echo '{}'
+fi
 
 exit 0
