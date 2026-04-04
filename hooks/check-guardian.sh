@@ -37,6 +37,80 @@ PROJECT_ROOT=$(detect_project_root)
 CLAUDE_DIR=$(get_claude_dir)
 PLAN="$PROJECT_ROOT/MASTER_PLAN.md"
 
+# --- Early-exit dedup: skip all work if findings haven't changed (DEC-GUARDIAN-DEDUP-001) ---
+# SubagentStop fires on every end_turn. After the first invocation delivers findings,
+# subsequent invocations check if anything changed. If not, exit immediately — no
+# tracking, no events, no log_info, no stderr. This prevents the feedback loop where
+# stderr from side-effect functions gets captured as "Stop hook feedback."
+#
+# @decision DEC-GUARDIAN-DEDUP-001 (early-exit extension)
+# @title Early-exit before all side effects when findings unchanged
+# @status accepted
+# @rationale The original dedup (bottom of script) ran all side effects first, then
+#   suppressed stdout. But track_agent_tokens, state_emit, log_info, and require_state
+#   all produce stderr. Claude Code captures stderr as "Stop hook feedback" which
+#   keeps the SubagentStop loop alive even when stdout is '{}'. The early-exit path
+#   exits BEFORE any of those calls, producing zero stdout output beyond '{}' and
+#   zero stderr. Only the core validation checks are re-run (dirty count, test status,
+#   plan existence) — these are pure git/file reads that produce no stderr when
+#   wrapped with 2>/dev/null. Response-text checks are intentionally excluded: on
+#   repeat invocations the response text is empty/zwsp anyway, and running them would
+#   produce different results from the full-body run (false "changed" detection).
+_DEDUP_PHASH_EARLY=$(project_hash "$PROJECT_ROOT" 2>/dev/null || echo "")
+_DEDUP_MARKER_EARLY="${CLAUDE_DIR}/state/${_DEDUP_PHASH_EARLY}/.guardian-stop-hash"
+if [[ -f "$_DEDUP_MARKER_EARLY" ]]; then
+    # Marker exists — a previous invocation already delivered findings.
+    # Run ONLY the core validation checks (no tracking, no events, no trace, no log_info).
+
+    # Git state for validation
+    _DE_DIRTY=$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    _DE_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    _DE_LAST=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null || echo "none")
+
+    _DE_ISSUES=()
+
+    # Core check: uncommitted changes
+    if [[ "$_DE_DIRTY" -gt 0 ]]; then
+        _DE_ISSUES+=("$_DE_DIRTY uncommitted change(s) remaining after guardian operation")
+    fi
+
+    # Core check: test status (flat-file fallback works without state-lib loaded)
+    if read_test_status "$PROJECT_ROOT" 2>/dev/null; then
+        if [[ "$TEST_RESULT" == "fail" && "$TEST_AGE" -lt 1800 ]]; then
+            _DE_ISSUES+=("Tests failing ($TEST_FAILS failures)")
+        fi
+    else
+        _DE_ISSUES+=("No test results found — verify tests were run before committing")
+    fi
+
+    # Core check: plan existence
+    if [[ ! -f "$PLAN" ]]; then
+        _DE_ISSUES+=("MASTER_PLAN.md not found — should exist before guardian merges")
+    fi
+
+    # Build context string matching the main body's format
+    _DE_CONTEXT=""
+    if [[ ${#_DE_ISSUES[@]} -gt 0 ]]; then
+        _DE_CONTEXT="Guardian validation: ${#_DE_ISSUES[@]} issue(s)."
+        for _de_issue in "${_DE_ISSUES[@]}"; do
+            _DE_CONTEXT+="\n- $_de_issue"
+        done
+    else
+        _DE_CONTEXT="Guardian validation: clean. Branch=$_DE_BRANCH, last commit: $_DE_LAST"
+    fi
+
+    # Compare hash to marker
+    _DE_HASH=$(printf '%s' "$_DE_CONTEXT" | ${_SHA256_CMD:-sha256sum} 2>/dev/null | cut -c1-16)
+    _DE_PREV=$(cat "$_DEDUP_MARKER_EARLY" 2>/dev/null || echo "")
+
+    if [[ "$_DE_HASH" == "$_DE_PREV" ]]; then
+        # Same findings — exit completely silent (no stdout beyond '{}', no stderr)
+        echo '{}'
+        exit 0
+    fi
+    # Findings changed — fall through to full run which will deliver them
+fi
+
 # Track subagent completion and tokens
 track_subagent_stop "$PROJECT_ROOT" "guardian"
 track_agent_tokens "$AGENT_RESPONSE"
